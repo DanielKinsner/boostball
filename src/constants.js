@@ -21,13 +21,13 @@ export const GOAL_HEIGHT = 642.775;     // z < this is inside goal mouth
 export const GOAL_DEPTH = 880;          // goal box extends to |y| = 5120 + 880 = 6000
 
 // ---------- Ball ----------
-export const BALL_RADIUS = 92.75;
+export const BALL_RADIUS = 91.25;
 export const BALL_MASS = 30;
 export const BALL_RESTITUTION = 0.6;        // normal bounce coefficient
 export const BALL_FRICTION_MU = 0.285;      // tangential bounce friction (Sam Mish model)
 export const BALL_FRICTION_Y = 2.0;         // ratio clamp factor in bounce friction
 export const BALL_SPIN_A = 0.0003;          // angular impulse coupling on bounce
-export const BALL_DRAG = 0.0305;            // linear damping per second
+export const BALL_DRAG = 0.03;            // linear damping per second
 export const BALL_MAX_SPEED = 6000;
 export const BALL_MAX_ANG_VEL = 6.0;        // rad/s
 
@@ -36,7 +36,7 @@ export const CAR_LENGTH = 118.01;
 export const CAR_WIDTH = 84.2;
 export const CAR_HEIGHT = 36.16;
 export const CAR_MASS = 180;
-export const CAR_REST_Z = 17.01;            // chassis center height when resting on ground
+export const CAR_REST_Z = 17.0;            // chassis center height when resting on ground
 export const CAR_MAX_SPEED = 2300;          // hard cap on |velocity|
 export const CAR_MAX_ANG_VEL = 5.5;         // rad/s hard cap
 export const SUPERSONIC_ON = 2200;          // becomes supersonic at/above
@@ -59,14 +59,15 @@ export const STEER_CURVE = [
   [1000, 0.00235],
   [1500, 0.001375],
   [1750, 0.0011],
-  [2300, 0.00088],
+  [2500, 0.00088],
 ];
 export const HANDBRAKE_GRIP = 0.18;         // lateral grip multiplier while powersliding (1 = full grip)
 export const LATERAL_GRIP = 1.0;            // normal lateral friction strength (fraction of lateral vel killed per ~0.05s)
 export const STICKY_FORCE = 325;            // extra downward accel while grounded (wall driving stick)
 
 // Boost
-export const BOOST_ACCEL = 991.667;         // uu/s^2 while boosting
+export const BOOST_ACCEL = 991.667;         // uu/s^2 while boosting on ground (2975/3)
+export const BOOST_ACCEL_AIR = 1058.333;    // uu/s^2 while boosting airborne (3175/3)
 export const BOOST_CONSUMPTION = 33.3;      // boost units per second
 export const BOOST_MAX = 100;
 export const BOOST_SPAWN_AMOUNT = 33.3;     // boost at kickoff/respawn
@@ -85,14 +86,15 @@ export const JUMP_HOLD_MAX_TIME = 0.2;      // seconds of hold force
 export const DOUBLE_JUMP_IMPULSE = 292;
 export const DOUBLE_JUMP_WINDOW = 1.25;     // seconds after leaving ground to use 2nd jump/dodge
 export const DODGE_IMPULSE = 500;           // planar velocity impulse on dodge
-export const DODGE_BACKWARD_SCALE = 1.33;   // backward dodges get a stronger impulse (RL quirk)
+export const DODGE_BACKWARD_SCALE = 2.5;    // backward dodges (RocketSim FLIP_BACKWARD_IMPULSE_MAX_SPEED_SCALE)
+export const DODGE_SIDE_SCALE = 1.9;        // sideways dodges
 export const DODGE_TORQUE_TIME = 0.65;      // flip animation/torque duration
 export const DODGE_ANG_VEL = 5.5;           // flip angular speed rad/s
 
 // Air control torques (rad/s^2) and damping (rad/s^2 per rad/s) — RLUtilities values
 export const AIR_TORQUE_PITCH = 12.146;
-export const AIR_TORQUE_YAW = 9.11;
-export const AIR_TORQUE_ROLL = 38.34;
+export const AIR_TORQUE_YAW = 8.92;
+export const AIR_TORQUE_ROLL = 36.08;
 export const AIR_DAMP_PITCH = 2.798;  // only when no pitch input
 export const AIR_DAMP_YAW = 1.886;
 export const AIR_DAMP_ROLL = 4.47;
@@ -104,6 +106,7 @@ export const BALL_HIT_SCALE_CURVE = [
   [0, 0.65],
   [500, 0.65],
   [2300, 0.55],
+  [4600, 0.30],
 ];
 
 // Demos / bumps
