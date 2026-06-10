@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Rocket Clone</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #05060f; }
+    #game-canvas { display: block; width: 100%; height: 100%; }
+    #hud-root {
+      position: fixed; inset: 0; pointer-events: none;
+      font-family: 'Segoe UI', system-ui, sans-serif; user-select: none;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game-canvas"></canvas>
+  <div id="hud-root"></div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
