@@ -1,6 +1,8 @@
 // One-off screenshot tool for visual iteration on car/pad meshes.
 // Uses chase/ball cam orientations by positioning the player car + ball so the
-// game's native cameras frame the subject. Usage:
+// game's native cameras frame the subject. Pauses gameplay (P) and continuously
+// re-pins the car position via a setInterval so any gamepad input the human is
+// providing can't drag the car off-frame. Usage:
 //   node tests/diag-screenshot.mjs [outPathBase]
 import { chromium } from 'playwright';
 
@@ -20,68 +22,118 @@ page.on('console', (msg) => {
 
 await page.goto('http://localhost:5173', { waitUntil: 'domcontentloaded' });
 await page.waitForFunction(() => !!window.__BOOSTBALL, null, { timeout: 20000 });
-// Wait until the play phase (kickoff countdown finishes).
 await page.waitForFunction(
   () => window.__BOOSTBALL?.state?.phase === 'play',
   null,
   { timeout: 20000 },
 ).catch(() => {});
-await page.waitForTimeout(800);
-await page.mouse.click(640, 400); // focus the page
+await page.waitForTimeout(600);
+await page.mouse.click(640, 400); // focus
 
-// --- Side view: ball at +y, ball cam frames car from -y side ---
-await page.evaluate(() => {
-  const g = window.__BOOSTBALL;
-  const c = g.playerCar;
-  c.position.set(0, 0, 17);
-  c.velocity.set(0, 0, 0);
-  c.angularVelocity.set(0, 0, 0);
-  c.quaternion.set(0, 0, 0, 1); // forward = +x
-  g.botCar.position.set(3500, 4500, 17);
-  g.botCar.velocity.set(0, 0, 0);
-  g.world.ball.position.set(0, 3000, 92);
-  g.world.ball.velocity.set(0, 0, 0);
+// Helper: pin the player car at a pose every frame so gamepad input can't drift it.
+// quat = {x,y,z,w}; pos = [x,y,z]; ballPos = [x,y,z]; pinBot = optional [x,y,z]
+async function pinAndSettle(page, { pos, quat, ballPos, pinBot, waitMs }) {
+  await page.evaluate(({ pos, quat, ballPos, pinBot }) => {
+    if (window.__bbPinHandle) {
+      clearInterval(window.__bbPinHandle);
+      window.__bbPinHandle = null;
+    }
+    const g = window.__BOOSTBALL;
+    const apply = () => {
+      const c = g.playerCar;
+      c.position.set(pos[0], pos[1], pos[2]);
+      c.velocity.set(0, 0, 0);
+      c.angularVelocity.set(0, 0, 0);
+      c.quaternion.set(quat.x, quat.y, quat.z, quat.w);
+      if (pinBot) {
+        g.botCar.position.set(pinBot[0], pinBot[1], pinBot[2]);
+        g.botCar.velocity.set(0, 0, 0);
+        g.botCar.angularVelocity.set(0, 0, 0);
+      }
+      if (ballPos) {
+        g.world.ball.position.set(ballPos[0], ballPos[1], ballPos[2]);
+        g.world.ball.velocity.set(0, 0, 0);
+        g.world.ball.angularVelocity.set(0, 0, 0);
+      }
+    };
+    apply();
+    window.__bbPinHandle = setInterval(apply, 16);
+  }, { pos, quat, ballPos, pinBot });
+  await page.waitForTimeout(waitMs);
+}
+
+async function unpin(page) {
+  await page.evaluate(() => {
+    if (window.__bbPinHandle) {
+      clearInterval(window.__bbPinHandle);
+      window.__bbPinHandle = null;
+    }
+  });
+}
+
+// Quaternion helpers (z-axis yaw).
+function qYaw(theta) {
+  return { x: 0, y: 0, z: Math.sin(theta / 2), w: Math.cos(theta / 2) };
+}
+
+// --- Side view: ball at +y so ball cam frames car from -y side ---
+// Force ball cam ON.
+await page.keyboard.press('KeyT');
+await pinAndSettle(page, {
+  pos: [0, 0, 17],
+  quat: qYaw(0), // forward = +x
+  ballPos: [0, 3000, 92],
+  pinBot: [3500, 4500, 17],
+  waitMs: 2400,
 });
-await page.keyboard.press('KeyT'); // toggle ball cam
-await page.waitForTimeout(2400);
 await page.screenshot({ path: outSide, fullPage: false });
 
-// --- Chase view: turn off ball cam, frame car from behind (forward = +x) ---
-await page.keyboard.press('KeyT');
-await page.evaluate(() => {
-  const g = window.__BOOSTBALL;
-  const c = g.playerCar;
-  c.position.set(0, 0, 17);
-  c.velocity.set(0, 0, 0);
-  c.quaternion.set(0, 0, 0, 1);
+// --- Chase view: chase cam, car at origin facing +x ---
+await page.keyboard.press('KeyT'); // back to chase
+await pinAndSettle(page, {
+  pos: [0, 0, 17],
+  quat: qYaw(0),
+  ballPos: [0, 5000, 92], // far away
+  pinBot: [3500, 4500, 17],
+  waitMs: 2200,
 });
-await page.waitForTimeout(2000);
 await page.screenshot({ path: outChase, fullPage: false });
 
-// --- 3/4 view via ball cam with the ball at +x +y elevated ---
-await page.keyboard.press('KeyT');
-await page.evaluate(() => {
-  const g = window.__BOOSTBALL;
-  const c = g.playerCar;
-  c.position.set(0, 0, 17);
-  c.velocity.set(0, 0, 0);
-  c.quaternion.set(0, 0, 0, 1);
-  g.world.ball.position.set(800, 1500, 250);
+// --- 3/4 view: ball cam, ball at +x +y, slight elevation ---
+await page.keyboard.press('KeyT'); // ball cam on
+await pinAndSettle(page, {
+  pos: [0, 0, 17],
+  quat: qYaw(0),
+  ballPos: [1500, 1500, 200],
+  pinBot: [3500, 4500, 17],
+  waitMs: 2200,
 });
-await page.waitForTimeout(2000);
 await page.screenshot({ path: outTop, fullPage: false });
 
-// --- Pads view: park car near a big pad ---
-await page.keyboard.press('KeyT'); // back to chase
-await page.evaluate(() => {
-  const g = window.__BOOSTBALL;
-  const c = g.playerCar;
-  c.position.set(-3000, 0, 17);
-  c.velocity.set(0, 0, 0);
-  c.quaternion.setFromAxisAngle({ x: 0, y: 0, z: 1 }, Math.PI);
+// --- Pads view: chase, park near big pad at (-3584, 0) facing -x ---
+await page.keyboard.press('KeyT'); // chase
+await pinAndSettle(page, {
+  pos: [-3300, 0, 17],
+  quat: qYaw(Math.PI),
+  ballPos: [0, 5000, 92],
+  pinBot: [3500, 4500, 17],
+  waitMs: 2000,
 });
-await page.waitForTimeout(1800);
 await page.screenshot({ path: outPads, fullPage: false });
+
+// --- Small-pad view: park near a small pad and look toward it ---
+const outSmallPads = out.replace(/\.png$/, '_smallpads.png');
+await pinAndSettle(page, {
+  pos: [-700, -1024, 17],
+  quat: qYaw(Math.PI / 2), // facing +y
+  ballPos: [0, 5000, 92],
+  pinBot: [3500, 4500, 17],
+  waitMs: 2000,
+});
+await page.screenshot({ path: outSmallPads, fullPage: false });
+console.log('small pads:', outSmallPads);
+
+await unpin(page);
 
 console.log('side:   ', outSide);
 console.log('chase:  ', outChase);

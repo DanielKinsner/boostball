@@ -21,10 +21,14 @@ const WHEEL_AXLE_Z_REAR = WHEEL_RADIUS_REAR - CAR_REST_Z;
 // Total visual body length/width/height (the physics hitbox is ~118x84x36).
 // We push the body taller than the hitbox (~36 above chassis center) per RL look —
 // the hitbox itself only defines collisions, not the silhouette.
+//
+// Profile-shape coords: x = forward (-L/2..+L/2), z = up (BODY_FLOOR..BODY_HEIGHT).
+// BODY_FLOOR is the belly line (sits just above the ground when resting on wheels).
+// BODY_HEIGHT is the absolute roof line above the chassis center.
 const BODY_LENGTH = 118;
 const BODY_WIDTH = 84;
-const BODY_HEIGHT = 36; // above chassis center
-const BODY_FLOOR = -14; // belly clearance (below chassis center)
+const BODY_HEIGHT = 30; // cabin roof above chassis center (Octane is long & low)
+const BODY_FLOOR = -10; // belly above chassis center bottom
 
 // Body paint — fully saturated team color (the clearcoat darkens it slightly).
 const BLUE_BODY = 0x0a3a82;
@@ -37,65 +41,70 @@ const _v = new THREE.Vector3();
 const _vFwd = new THREE.Vector3();
 
 /**
- * Build the Octane-ish side-profile Shape in the local XY plane.
- * X = car-forward axis. Y here = vertical (will become world Z after rotation).
- * Returns a closed THREE.Shape suitable for ExtrudeGeometry.
+ * Build the Octane-ish side-profile Shape.
+ * Local coords on the shape plane: x = car-forward, y = up (will become world Z
+ * after we rotate the extruded geometry -90° around X).
+ *
+ * Octane silhouette goals:
+ *   - long low hood sloping up over the front wheel hump
+ *   - cabin peak slightly aft of center
+ *   - mostly flat rear deck dropping to a short rear bumper
+ *   - belly clearance for the wheels to sit underneath
  */
 function buildOctaneProfile() {
   const L = BODY_LENGTH;
-  const xF = L * 0.5;   // +xF = front nose
-  const xR = -L * 0.5;  // -xR = rear
+  const xF = L * 0.5;       // +xF = front nose tip
+  const xR = -L * 0.5;      // -xR = rear bumper face
+  const yBelly = BODY_FLOOR;        // belly line
+  const yLoHood = BODY_FLOOR + 10;  // bottom of hood at the very nose
+  const yHood = BODY_FLOOR + 14;    // hood plateau height
+  const yPeak = BODY_HEIGHT;        // cabin peak
+  const yDeck = BODY_FLOOR + 22;    // rear deck height
 
   const shape = new THREE.Shape();
-  // Start at the bottom-front splitter edge and trace counter-clockwise.
-  // Bottom (belly) is mostly flat at BODY_FLOOR with a slight rear scoop.
-  shape.moveTo(xF - 4, BODY_FLOOR + 2);
-  // Front splitter — slight forward lip protruding low.
-  shape.lineTo(xF + 2, BODY_FLOOR + 4);
-  // Up the nose tip (chamfered) to the hood line.
-  shape.quadraticCurveTo(xF + 6, BODY_FLOOR + 10, xF + 4, BODY_FLOOR + 16);
-  // Hood rises smoothly over the front wheel hump toward the cabin.
+  // Start at the front-bottom corner and trace clockwise around the silhouette.
+  shape.moveTo(xF - 6, yBelly);
+  // Forward splitter lip protruding slightly.
+  shape.lineTo(xF, yBelly + 3);
+  // Soft chamfer up the nose face.
+  shape.quadraticCurveTo(xF + 3, yLoHood - 2, xF - 2, yLoHood);
+  // Long low hood that gradually rises over the front wheel hump.
   shape.bezierCurveTo(
-    xF - 4,  BODY_FLOOR + 26,
-    xF - 18, BODY_FLOOR + 30,
-    xF - 28, BODY_FLOOR + 36,
+    xF - 18, yHood - 1,   // just past nose
+    xF - 30, yHood + 1,   // over front wheels
+    xF - 42, yHood + 4,   // approaching the cabin base
   );
-  // Windshield ramp up to the cabin peak (just behind chassis center).
+  // Windshield ramp from hood up to cabin peak.
   shape.bezierCurveTo(
-    xF - 40, BODY_FLOOR + 42,
-    xF - 50, BODY_FLOOR + 48,
-    xF - 56, BODY_HEIGHT + BODY_FLOOR + 4, // peak around mid-cabin
+    xF - 50, yHood + 10,
+    xF - 56, yPeak - 4,
+    -8,      yPeak,         // cabin peak slightly aft of center
   );
-  // Cabin roof — gentle dome reaching peak then sloping down to the rear deck.
-  // Cabin peak intentionally sits slightly aft of center for the classic Octane look.
-  const peakX = -L * 0.05;
-  const peakY = BODY_FLOOR + BODY_HEIGHT + 4;
+  // Cabin roof dome (short flat-ish top).
   shape.bezierCurveTo(
-    -L * 0.18, peakY + 1,
-    peakX + 6, peakY + 2,
-    peakX,     peakY + 2,
+    -16, yPeak,
+    -22, yPeak - 1,
+    -28, yPeak - 3,
   );
-  // Rear window slope — drops from cabin to rear deck.
+  // Rear window slope from cabin down to the rear deck.
   shape.bezierCurveTo(
-    peakX - 14, peakY,
-    -L * 0.28,  BODY_FLOOR + BODY_HEIGHT - 2,
-    -L * 0.36,  BODY_FLOOR + BODY_HEIGHT - 6,
+    -36, yPeak - 8,
+    -42, yDeck + 2,
+    -48, yDeck,
   );
-  // Rear deck flattens then kicks up slightly at the very back (the Octane "duck-tail").
-  shape.lineTo(-L * 0.46, BODY_FLOOR + BODY_HEIGHT - 8);
-  shape.quadraticCurveTo(
-    -L * 0.49, BODY_FLOOR + BODY_HEIGHT - 4,
-    xR + 2,    BODY_FLOOR + BODY_HEIGHT - 6,
-  );
+  // Flat rear deck.
+  shape.lineTo(xR + 8, yDeck);
+  // Slight duck-tail kick.
+  shape.quadraticCurveTo(xR + 3, yDeck + 1, xR, yDeck - 2);
   // Down the rear bumper face.
   shape.bezierCurveTo(
-    xR - 2, BODY_FLOOR + 22,
-    xR - 4, BODY_FLOOR + 14,
-    xR + 2, BODY_FLOOR + 6,
+    xR - 1, yDeck - 8,
+    xR - 1, yBelly + 6,
+    xR + 4, yBelly + 2,
   );
   // Across the rear belly back to start.
-  shape.lineTo(xR + 6, BODY_FLOOR + 2);
-  shape.lineTo(xF - 4, BODY_FLOOR + 2);
+  shape.lineTo(xR + 8, yBelly);
+  shape.lineTo(xF - 6, yBelly);
   return shape;
 }
 
@@ -156,10 +165,10 @@ export class CarVisual {
     });
     {
       // Thin rectangular sill strip across most of the body length, hugging the side.
-      const sillGeom = new THREE.BoxGeometry(BODY_LENGTH * 0.7, 1.5, 7);
+      const sillGeom = new THREE.BoxGeometry(BODY_LENGTH * 0.7, 1.5, 6);
       for (const sy of [-1, 1]) {
         const sill = new THREE.Mesh(sillGeom, skirtMat);
-        sill.position.set(-2, sy * (BODY_WIDTH * 0.5 + 0.5), BODY_FLOOR + 6);
+        sill.position.set(-2, sy * (BODY_WIDTH * 0.5 + 0.5), BODY_FLOOR + 5);
         sill.castShadow = true;
         this.mesh.add(sill);
       }
@@ -183,10 +192,10 @@ export class CarVisual {
         roughness: 0.85,
         metalness: 0.2,
       });
-      const intakeGeom = new THREE.BoxGeometry(20, 2, 8);
+      const intakeGeom = new THREE.BoxGeometry(20, 2, 7);
       for (const sy of [-1, 1]) {
         const intake = new THREE.Mesh(intakeGeom, intakeMat);
-        intake.position.set(BODY_LENGTH * 0.12, sy * (BODY_WIDTH * 0.5 + 0.4), BODY_FLOOR + 18);
+        intake.position.set(BODY_LENGTH * 0.12, sy * (BODY_WIDTH * 0.5 + 0.4), BODY_FLOOR + 14);
         this.mesh.add(intake);
       }
     }
@@ -237,12 +246,15 @@ export class CarVisual {
       reflectivity: 0.85,
     });
     {
+      // Squashed ellipsoid forming the windscreen/canopy bubble.
+      // Sit it ON the cabin peak so the dark glass appears as a hood-to-trunk dome.
       const canopyGeom = new THREE.SphereGeometry(1, 18, 12);
       const canopy = new THREE.Mesh(canopyGeom, canopyMat);
-      // Squashed ellipsoid: long along x, narrow across y, low height.
-      canopy.scale.set(BODY_LENGTH * 0.22, BODY_WIDTH * 0.34, BODY_HEIGHT * 0.32);
-      // Sit on the cabin peak — slightly aft of center.
-      canopy.position.set(-BODY_LENGTH * 0.04, 0, BODY_FLOOR + BODY_HEIGHT * 0.95);
+      // Squashed ellipsoid: long along x, narrower across y, ~1/3 the body height.
+      canopy.scale.set(BODY_LENGTH * 0.28, BODY_WIDTH * 0.36, 12);
+      // Slightly aft of center, height set so the dome's top sits just above the
+      // body peak (z=BODY_HEIGHT) without floating.
+      canopy.position.set(-BODY_LENGTH * 0.04, 0, BODY_HEIGHT - 5);
       canopy.castShadow = true;
       this.mesh.add(canopy);
     }
@@ -257,18 +269,20 @@ export class CarVisual {
       envMapIntensity: 0.9,
     });
     {
+      // Spoiler sits just above the rear deck. Deck z ≈ BODY_FLOOR + 22 = 12.
+      const deckZ = BODY_FLOOR + 22;
       const spoiler = new THREE.Mesh(
         new THREE.BoxGeometry(11, BODY_WIDTH * 0.78, 2.2),
         spoilerMat,
       );
-      spoiler.position.set(-BODY_LENGTH * 0.43, 0, BODY_FLOOR + BODY_HEIGHT + 6);
+      spoiler.position.set(-BODY_LENGTH * 0.43, 0, deckZ + 8);
       spoiler.castShadow = true;
       this.mesh.add(spoiler);
       // Twin struts
       const strutGeom = new THREE.BoxGeometry(2.4, 2.4, 8);
       for (const sy of [-1, 1]) {
         const s = new THREE.Mesh(strutGeom, spoilerMat);
-        s.position.set(-BODY_LENGTH * 0.43, sy * BODY_WIDTH * 0.3, BODY_FLOOR + BODY_HEIGHT + 1);
+        s.position.set(-BODY_LENGTH * 0.43, sy * BODY_WIDTH * 0.3, deckZ + 4);
         this.mesh.add(s);
       }
     }
@@ -277,24 +291,24 @@ export class CarVisual {
     const trimMat = new THREE.MeshStandardMaterial({
       color: 0x000000,
       emissive: accent,
-      emissiveIntensity: 4.0,
+      emissiveIntensity: 4.5,
       toneMapped: true,
     });
     {
       const trimGeom = new THREE.BoxGeometry(BODY_LENGTH * 0.78, 1.2, 1.8);
       for (const sy of [-1, 1]) {
         const t = new THREE.Mesh(trimGeom, trimMat);
-        t.position.set(-2, sy * (BODY_WIDTH * 0.5 + 0.9), BODY_FLOOR + 12);
+        t.position.set(-2, sy * (BODY_WIDTH * 0.5 + 0.9), BODY_FLOOR + 10);
         this.mesh.add(t);
       }
     }
-    // Hood accent stripe up the center (subtle — adds team identity to the back).
+    // Hood center accent — short bright stripe up the hood center line.
     {
       const hoodTrim = new THREE.Mesh(
-        new THREE.BoxGeometry(BODY_LENGTH * 0.18, 1.5, 1.0),
+        new THREE.BoxGeometry(BODY_LENGTH * 0.22, 1.5, 1.0),
         trimMat,
       );
-      hoodTrim.position.set(BODY_LENGTH * 0.28, 0, BODY_FLOOR + BODY_HEIGHT * 0.85);
+      hoodTrim.position.set(BODY_LENGTH * 0.22, 0, BODY_FLOOR + 14);
       this.mesh.add(hoodTrim);
     }
 
@@ -305,10 +319,10 @@ export class CarVisual {
         emissive: 0xfff5d8,
         emissiveIntensity: 3.0,
       });
-      const hlGeom = new THREE.BoxGeometry(2.5, 12, 4);
+      const hlGeom = new THREE.BoxGeometry(2.5, 12, 3.5);
       for (const sy of [-1, 1]) {
         const hl = new THREE.Mesh(hlGeom, headlightMat);
-        hl.position.set(BODY_LENGTH * 0.49, sy * BODY_WIDTH * 0.3, BODY_FLOOR + 22);
+        hl.position.set(BODY_LENGTH * 0.485, sy * BODY_WIDTH * 0.3, BODY_FLOOR + 13);
         this.mesh.add(hl);
       }
     }
@@ -332,10 +346,11 @@ export class CarVisual {
       );
       // Cylinder default axis is +Y; rotate so it stands vertically (+Z).
       antennaShaft.rotation.x = Math.PI / 2;
-      antennaShaft.position.set(-BODY_LENGTH * 0.30, BODY_WIDTH * 0.30, BODY_FLOOR + BODY_HEIGHT + 6);
+      const deckZ = BODY_FLOOR + 22;
+      antennaShaft.position.set(-BODY_LENGTH * 0.30, BODY_WIDTH * 0.28, deckZ + 7);
       this.mesh.add(antennaShaft);
       const tip = new THREE.Mesh(new THREE.SphereGeometry(1.0, 8, 6), tipMat);
-      tip.position.set(-BODY_LENGTH * 0.30, BODY_WIDTH * 0.30, BODY_FLOOR + BODY_HEIGHT + 12);
+      tip.position.set(-BODY_LENGTH * 0.30, BODY_WIDTH * 0.28, deckZ + 13);
       this.mesh.add(tip);
     }
 
@@ -353,11 +368,12 @@ export class CarVisual {
       emissiveIntensity: 2.5,
     });
     {
+      const nozzleZ = BODY_FLOOR + 16; // tucked just under the rear deck
       const nozzleGeom = new THREE.CylinderGeometry(7, 9, 12, 16);
       this.nozzle = new THREE.Mesh(nozzleGeom, nozzleMat);
       // Cylinder axis defaults to +Y; rotate to +X so it points rearward.
       this.nozzle.rotation.z = Math.PI / 2;
-      this.nozzle.position.set(-BODY_LENGTH * 0.5 - 4, 0, BODY_FLOOR + 14);
+      this.nozzle.position.set(-BODY_LENGTH * 0.5 - 4, 0, nozzleZ);
       this.mesh.add(this.nozzle);
 
       const nozzleInner = new THREE.Mesh(
@@ -365,8 +381,9 @@ export class CarVisual {
         nozzleInnerMat,
       );
       nozzleInner.rotation.z = Math.PI / 2;
-      nozzleInner.position.set(-BODY_LENGTH * 0.5 - 9.5, 0, BODY_FLOOR + 14);
+      nozzleInner.position.set(-BODY_LENGTH * 0.5 - 9.5, 0, nozzleZ);
       this.mesh.add(nozzleInner);
+      this._nozzleZ = nozzleZ;
     }
 
     // --- Wheels: rubber tires + metallic rims ---
@@ -494,7 +511,7 @@ export class CarVisual {
   nozzleWorldPos(out) {
     const target = out || _v;
     // Local nozzle tip in car space: just past the rear of the body, at nozzle height.
-    target.set(-BODY_LENGTH * 0.5 - 11, 0, BODY_FLOOR + 14);
+    target.set(-BODY_LENGTH * 0.5 - 11, 0, this._nozzleZ ?? (BODY_FLOOR + 16));
     target.applyQuaternion(this.mesh.quaternion);
     target.add(this.mesh.position);
     return target;
