@@ -62,6 +62,9 @@ export class InputManager {
         else if (e.code === 'KeyP' || e.code === 'Escape') this._pendingToggles.pause = true;
         else if (e.code === 'KeyM') this._pendingToggles.mute = true;
         else if (e.code === 'KeyH') this._pendingToggles.help = true;
+        // Restart edge is only acted on by main.js when state.phase === 'over'.
+        // Enter presses during play are intentional no-ops; InputManager stays
+        // phase-agnostic per the architecture contract.
         else if (e.code === 'Enter') this._pendingToggles.restart = true;
       }
       this._keys[e.code] = true;

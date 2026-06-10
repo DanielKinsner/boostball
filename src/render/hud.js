@@ -591,8 +591,10 @@ export class HUD {
    * @param {{state:any, playerCar:any, ball:any}} ctx
    */
   update(dt, { state, playerCar, ball }) {
-    // Auto-hide help on the first frame play begins.
-    if (!this._helpAutoHidden && state && state.phase === 'play') {
+    // Auto-hide the boot-time help overlay on the first update tick so it
+    // doesn't visually collide with the kickoff countdown text. The "H — HELP"
+    // hint at bottom-left still prompts users to re-open it.
+    if (!this._helpAutoHidden && state && state.phase !== 'over') {
       this._helpVisible = false;
       this._helpAutoHidden = true;
       this._showOverlay(this._helpOverlay, false);

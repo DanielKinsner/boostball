@@ -167,6 +167,7 @@ function buildLowerWalls() {
     roughness: 0.65,
     metalness: 0.3,
     map: makeWallPanelTexture(),
+    side: THREE.DoubleSide,
   });
 
   // X walls (left/right): full span, no goal cutout.
@@ -405,7 +406,6 @@ function buildCrowdDots() {
     color: 0x303848,
     emissive: 0xffffff,
     emissiveIntensity: 0.7,
-    vertexColors: true,
   });
   const inst = new THREE.InstancedMesh(geom, mat, count);
   inst.castShadow = false;
@@ -824,6 +824,7 @@ function buildAdBoards() {
         emissiveIntensity: 1.3,
         roughness: 0.6,
         metalness: 0.1,
+        side: THREE.DoubleSide,
       });
       const geom = new THREE.PlaneGeometry(segWidthX, boardHeight);
       const m = new THREE.Mesh(geom, mat);
@@ -848,6 +849,7 @@ function buildAdBoards() {
           emissiveMap: tex,
           emissive: 0xffffff,
           emissiveIntensity: 1.3,
+          side: THREE.DoubleSide,
         });
         const w = yBoardWidth / segPerYWall;
         const geom = new THREE.PlaneGeometry(w, boardHeight);

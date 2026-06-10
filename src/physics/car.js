@@ -84,6 +84,7 @@ export class Car {
     this._dodgeFlipAxis = new THREE.Vector3(); // car-local axis to spin around during flip
     this._wasOnGround = true;
     this._groundLockoutT = 0; // suppress 'grounded' for this many seconds (post-jump)
+    this._ballContactCooldown = 0; // seconds where Psyonix kick is suppressed (per-hit-event gate)
   }
 
   /** @returns {THREE.Vector3} world forward (cloned) */
@@ -168,8 +169,12 @@ export class Car {
       springAccel = clamp(springAccel, -10000, 10000);
       this.velocity.addScaledVector(hit.normal, springAccel * dt);
 
-      // STICKY_FORCE along -up (sticks car to surface, enables wall driving)
-      this.velocity.addScaledVector(_up, -C.STICKY_FORCE * dt);
+      // STICKY_FORCE along -surface-normal (sticks car to surface, enables wall driving).
+      // Use hit.normal rather than _up so the force points into the surface during
+      // alignment transients (alignUpTo below only closes ~4% of misalignment per
+      // substep at 240Hz, so _up can lag the normal by tens of degrees on floor↔wall fillets).
+      // Steady-state is unchanged because once aligned, -_up == -hit.normal.
+      this.velocity.addScaledVector(hit.normal, -C.STICKY_FORCE * dt);
 
       // Align car up to surface normal (slerp toward target orientation at ~10 rad/s)
       alignUpTo(this.quaternion, hit.normal, dt * 10, _q1, _q2);

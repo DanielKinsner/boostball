@@ -368,7 +368,6 @@ export class Effects {
       } else {
         primary = new THREE.Mesh(padDiscGeom, mat);
         primary.position.set(pad.position.x, pad.position.y, 4);
-        primary.rotation.x = -Math.PI / 2; // face up
       }
       group.add(primary);
       if (ring) group.add(ring);
@@ -493,7 +492,7 @@ export class Effects {
         this._demoBurst(ev.position);
       } else if (ev.type === 'ballHit') {
         if (ev.speed > 1000) this._sparkPuff(ev.position, Math.min(80, ev.speed * 0.04));
-      } else if (ev.type === 'land' || ev.type === 'bounce') {
+      } else if (ev.type === 'bounce') {
         const speed = ev.speed || 0;
         if (speed > 300) this._dustPuff(ev.position, Math.min(30, speed * 0.05));
       }

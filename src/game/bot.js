@@ -202,8 +202,20 @@ export class Bot {
         this._target.z = 17;
       }
       if (ballNear) {
-        // Clear: drive THROUGH ball away from own goal.
-        this._attackTarget();
+        // Clear: place the target on the OWN-GOAL side of the predicted ball
+        // so we strike it moving AWAY from own goal (opposite geometry to
+        // _attackTarget, which assumes the ball is in the opp half).
+        const oppGoalY = this.opponentGoalSign * ARENA_HALF_LENGTH;
+        const pred = _v1.copy(ball.position).addScaledVector(ball.velocity, 0.2);
+        const goalDir = _v2.set(0, oppGoalY, 0).sub(pred);
+        goalDir.z = 0;
+        if (goalDir.lengthSq() < 1) goalDir.set(0, this.opponentGoalSign, 0);
+        goalDir.normalize();
+        // +120 (not -120): target on the own-goal side of the ball.
+        this._target.copy(pred).addScaledVector(goalDir, 120);
+        this._target.x = clamp(this._target.x, -ARENA_HALF_WIDTH + 120, ARENA_HALF_WIDTH - 120);
+        this._target.y = clamp(this._target.y, -ARENA_HALF_LENGTH + 120, ARENA_HALF_LENGTH - 120);
+        this._target.z = 17;
       }
       return;
     }
@@ -438,8 +450,19 @@ export class Bot {
     const rollErr = _local.y;
     const pitchErr = _local.x;
 
-    controls.roll = clamp(-rollErr * 3, -1, 1);
-    controls.pitch = clamp(-pitchErr * 3, -1, 1);
+    if (_local.z < 0) {
+      // Inverted: proportional terms vanish at the antipode (world-up appears
+      // straight down in car-local, so rollErr/pitchErr ≈ 0 and AIR_DAMP_ROLL
+      // would hold us upside-down). Commit to a roll direction to escape the
+      // unstable equilibrium; prefer whichever side we're already tipping
+      // toward. Roll-only avoids the pitch+roll corkscrew that fights itself.
+      const bias = Math.abs(_local.y) > 1e-3 ? -Math.sign(_local.y) : 1;
+      controls.roll = bias;
+      controls.pitch = 0;
+    } else {
+      controls.roll = clamp(-rollErr * 3, -1, 1);
+      controls.pitch = clamp(-pitchErr * 3, -1, 1);
+    }
     // Mild forward throttle so we land moving the right way.
     controls.throttle = 1;
   }

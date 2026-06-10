@@ -134,14 +134,21 @@ export function collideCarBall(car, ball) {
   }
 
   // --- Psyonix impulse: forces ball along (ballPos - carPos), z flattened ---
-  _psyDir.copy(ball.position).sub(car.position);
-  _psyDir.z *= C.BALL_HIT_Z_SCALE;
-  const psyLen = _psyDir.length();
-  if (psyLen > 1e-6) {
-    _psyDir.multiplyScalar(1 / psyLen);
-    const scale = C.curveLerp(C.BALL_HIT_SCALE_CURVE, relSpeed);
-    const mag = relSpeed * scale;
-    ball.velocity.addScaledVector(_psyDir, mag);
+  // Per-hit-event gate: if the car is still embedded in the ball on subsequent
+  // substeps, depenetration alone won't separate them, but the Psyonix kick
+  // must only fire once per contact. Cooldown is ticked down per substep in
+  // world.js between collision passes.
+  if ((car._ballContactCooldown || 0) <= 0) {
+    _psyDir.copy(ball.position).sub(car.position);
+    _psyDir.z *= C.BALL_HIT_Z_SCALE;
+    const psyLen = _psyDir.length();
+    if (psyLen > 1e-6) {
+      _psyDir.multiplyScalar(1 / psyLen);
+      const scale = C.curveLerp(C.BALL_HIT_SCALE_CURVE, relSpeed);
+      const mag = relSpeed * scale;
+      ball.velocity.addScaledVector(_psyDir, mag);
+    }
+    car._ballContactCooldown = 0.05; // 50 ms hit-event gate
   }
 
   // --- Ball spin: tangential change couples to angular velocity ---

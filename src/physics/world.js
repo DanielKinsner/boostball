@@ -85,9 +85,15 @@ export class World {
         }
       }
 
-      // 3. Car-ball collisions
+      // 3. Car-ball collisions. Tick per-car ball-contact cooldown so the
+      // Psyonix kick only fires once per hit event, not every substep an
+      // embedded car keeps overlapping the ball.
       for (const car of this.cars) {
         if (car.isDemolished) continue;
+        if (car._ballContactCooldown > 0) {
+          car._ballContactCooldown -= subDt;
+          if (car._ballContactCooldown < 0) car._ballContactCooldown = 0;
+        }
         const result = collideCarBall(car, this.ball);
         if (result) {
           events.push({
@@ -167,10 +173,20 @@ export class World {
       car.angularVelocity.set(0, 0, 0);
       car.boost = BOOST_SPAWN_AMOUNT;
       car.isDemolished = false;
-      // Clear transient car state that may have been set by the Car class.
-      if (typeof car._jumpHoldT === 'number') car._jumpHoldT = 0;
-      if (typeof car._airTimer === 'number') car._airTimer = 0;
-      if (typeof car._dodgeTimer === 'number') car._dodgeTimer = 0;
+      // Clear transient Car-private state so leftover jump/dodge timers from a
+      // mid-air demolish don't suppress controls on respawn.
+      car._jumpHoldT = 0;
+      car._holdingJump = false;
+      car._airTime = 0;
+      car._usedDoubleJump = false;
+      car._dodgeTorqueT = 0;
+      car._jumpPrev = false;
+      car._groundLockoutT = 0;
+      car._wasOnGround = true;
+      car._groundNormal.set(0, 0, 1);
+      car.isOnGround = true;
+      car.isSupersonic = false;
+      car._ballContactCooldown = 0;
     }
 
     this._goalLatched = false;
@@ -188,8 +204,19 @@ export class World {
     car.angularVelocity.set(0, 0, 0);
     car.boost = BOOST_SPAWN_AMOUNT;
     car.isDemolished = false;
-    if (typeof car._jumpHoldT === 'number') car._jumpHoldT = 0;
-    if (typeof car._airTimer === 'number') car._airTimer = 0;
-    if (typeof car._dodgeTimer === 'number') car._dodgeTimer = 0;
+    // Clear transient Car-private state so leftover jump/dodge timers from a
+    // mid-air demolish don't suppress controls on respawn.
+    car._jumpHoldT = 0;
+    car._holdingJump = false;
+    car._airTime = 0;
+    car._usedDoubleJump = false;
+    car._dodgeTorqueT = 0;
+    car._jumpPrev = false;
+    car._groundLockoutT = 0;
+    car._wasOnGround = true;
+    car._groundNormal.set(0, 0, 1);
+    car.isOnGround = true;
+    car.isSupersonic = false;
+    car._ballContactCooldown = 0;
   }
 }

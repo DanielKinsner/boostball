@@ -174,6 +174,21 @@ export class SFX {
   }
 
   /**
+   * Duck continuous voices on pause so they don't drone while update() is
+   * skipped. On unpause, the next update() tick ramps gains back to their
+   * speed/boost/supersonic-derived targets — no explicit restore needed.
+   * @param {boolean} paused
+   */
+  setPaused(paused) {
+    if (!this.ctx || !this.master) return;
+    if (paused) {
+      if (this.engine) this._ramp(this.engine.gain.gain, 0, 0.05);
+      if (this.boostRoar) this._ramp(this.boostRoar.gain.gain, 0, 0.05);
+      if (this.windRoar) this._ramp(this.windRoar.gain.gain, 0, 0.05);
+    }
+  }
+
+  /**
    * @param {number} dt
    * @param {{playerCar: object, ball: object, state: object}} ctx
    */
@@ -217,8 +232,8 @@ export class SFX {
       if (state.phase === 'countdown' && cdInt !== this._lastCountdownT && cdInt > 0) {
         this._beep(880, 0.08, 'square', 0.25);
       }
-      if (state.phase === 'play' && this._lastCountdownT != null && this._lastCountdownT <= 1) {
-        // Just transitioned countdown -> play.
+      if (state.phase === 'play' && this._lastCountdownT != null && this._lastCountdownT >= 1 && cdInt <= 0) {
+        // Just transitioned countdown -> play (edge: prev tick was still in countdown, this tick is at 0).
         this._beep(1320, 0.25, 'square', 0.35);
       }
       this._lastCountdownT = cdInt;

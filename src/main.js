@@ -73,7 +73,7 @@ function frame(now) {
 
   const toggles = input.pollToggles();
   if (toggles.ballCam) ballCam = !ballCam;
-  if (toggles.pause) { paused = !paused; hud.setPaused(paused); }
+  if (toggles.pause) { paused = !paused; hud.setPaused(paused); sfx.setPaused(paused); }
   if (toggles.mute) sfx.toggleMute();
   if (toggles.help) hud.toggleHelp();
   if (toggles.restart && state.phase === 'over') restartMatch();
@@ -98,9 +98,13 @@ function frame(now) {
 
 function stepGame(dt) {
   const frozen = state.isFrozen();
+  // Always tick the bot so it observes phase transitions (e.g. countdown->play
+  // for the kickoff trigger). bot.update returns zero controls itself during
+  // non-play phases, so this is safe; we still gate the output on `frozen`.
+  const botControls = bot.update(dt, state.phase);
   const controlsById = {
     [playerCar.id]: frozen ? zeroControls() : input.getControls(),
-    [botCar.id]: frozen ? zeroControls() : bot.update(dt, state.phase),
+    [botCar.id]: frozen ? zeroControls() : botControls,
   };
 
   const events = world.step(dt, controlsById, { freeze: frozen });
