@@ -387,6 +387,45 @@ export function raycast(origin, dir, maxDist) {
     consider(t, plane.nx, plane.ny, plane.nz);
   }
 
+  // Fillet quarter-cylinders (floor↔vertical and ceiling↔vertical). Without these the car's
+  // suspension can't ride the wall-floor transition curves (wall driving feels impossible).
+  // Work in the (u, w) frame: u = R − a_v, w = R − a_h where a_* are interior plane distances.
+  // Fillet surface: u² + w² = R² restricted to u ≥ 0, w ≥ 0. Both u(t), w(t) are linear in t.
+  for (const plane of VERTICAL_PLANES) {
+    const av0 = ox * plane.nx + oy * plane.ny - plane.d; // interior distance to vertical plane
+    const dav = dx * plane.nx + dy * plane.ny;
+    for (let h = 0; h < 2; h++) {
+      // h=0: floor (a_h = z); h=1: ceiling (a_h = H − z)
+      const ah0 = h === 0 ? oz : ARENA_HEIGHT - oz;
+      const dah = h === 0 ? dz : -dz;
+      const u0 = FILLET_R - av0, du = -dav;
+      const w0 = FILLET_R - ah0, dw = -dah;
+      const A = du * du + dw * dw;
+      if (A < 1e-12) continue;
+      const B = 2 * (u0 * du + w0 * dw);
+      const Cq = u0 * u0 + w0 * w0 - FILLET_R * FILLET_R;
+      const disc = B * B - 4 * A * Cq;
+      if (disc < 0) continue;
+      const sq = Math.sqrt(disc);
+      // Nearest root first; from inside the arena (Cq < 0) the positive root is the exit hit.
+      for (const t of [(-B - sq) / (2 * A), (-B + sq) / (2 * A)]) {
+        if (t < 0 || t > maxDist || t >= bestT) continue;
+        const u = u0 + du * t;
+        const w = w0 + dw * t;
+        if (u < -1e-6 || w < -1e-6) continue; // outside the quarter arc
+        // Bevel fillets only exist in their quadrant.
+        if (plane.kind === 'bevel') {
+          const hx = ox + dx * t, hy = oy + dy * t;
+          if (plane.sx * hx < 0 || plane.sy * hy < 0) continue;
+        }
+        // Inward normal = (u·n_v + w·n_h)/R (unit by construction on the surface).
+        const nhz = h === 0 ? 1 : -1;
+        consider(t, (u * plane.nx) / FILLET_R, (u * plane.ny) / FILLET_R, (w * nhz) / FILLET_R);
+        break; // nearer valid root taken; no need to test the farther one
+      }
+    }
+  }
+
   // Goal interior planes — only relevant if ray crosses past |y|=ARENA_HALF_LENGTH.
   // We always test them; the t-comparison will pick the nearest valid hit. Side walls
   // and roof of goal are infinite planes in this formulation, but they only matter when

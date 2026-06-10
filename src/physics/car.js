@@ -78,7 +78,9 @@ export class Car {
     this._jumpPrev = false; // for edge-detect
     this._jumpHoldT = 0;     // remaining seconds where jump-hold accel applies
     this._holdingJump = false;
-    this._airTime = 0;       // seconds since leaving ground (for double-jump window)
+    this._airTime = 0;       // seconds since leaving ground
+    this._jumpedSinceGround = false; // RL rule: flip window only counts after a JUMP;
+    this._timeSinceJump = 0;         // falling without jumping keeps the flip forever (wavedash)
     this._usedDoubleJump = false;
     this._dodgeTorqueT = 0;  // remaining seconds of dodge flip torque
     this._dodgeFlipAxis = new THREE.Vector3(); // car-local axis to spin around during flip
@@ -133,12 +135,16 @@ export class Car {
     // --- Suspension raycast ---
     const rayOrigin = _v1.copy(this.position);
     const rayDir = _v2.copy(_up).multiplyScalar(-1);
-    const maxDist = C.CAR_REST_Z + 30;
+    // Reach is generous so the car keeps its footing through wall-floor fillet
+    // transitions, where the surface curves away under the (lagging) chassis.
+    const maxDist = C.CAR_REST_Z + 45;
     let hit = null;
     if (arena && typeof arena.raycast === 'function') {
       hit = arena.raycast(rayOrigin, rayDir, maxDist);
     }
-    const rayGrounded = !!(hit && hit.normal && hit.normal.dot(_up) > 0.4);
+    // 0.6 ⇒ surface within ~53° of the car's belly. Looser values let tilted cars
+    // "ground" on flat floor, hover on the suspension spring, and skip gravity.
+    const rayGrounded = !!(hit && hit.normal && hit.normal.dot(_up) > 0.6);
     const grounded = rayGrounded && this._groundLockoutT <= 0;
 
     // Edge-detect jump button
@@ -147,12 +153,16 @@ export class Car {
     if (grounded) {
       this._groundNormal.copy(hit.normal);
       this._airTime = 0;
+      this._jumpedSinceGround = false;
+      this._timeSinceJump = 0;
       this._usedDoubleJump = false;
     } else {
       this._airTime += dt;
-      if (this._airTime > C.DOUBLE_JUMP_WINDOW) {
-        // Window closed: treat as used so neither double jump nor dodge works
-        this._usedDoubleJump = true;
+      // RL rule: the 1.25s flip window starts at the FIRST JUMP. A car that drove
+      // off a wall/edge without jumping keeps its flip until it lands (wavedash).
+      if (this._jumpedSinceGround) {
+        this._timeSinceJump += dt;
+        if (this._timeSinceJump > C.DOUBLE_JUMP_WINDOW) this._usedDoubleJump = true;
       }
     }
 
@@ -165,6 +175,9 @@ export class Car {
       const vAlongN = this.velocity.dot(hit.normal);
       // Critical damping ~ 2*sqrt(stiffness). 250 stiffness, ~32 damping.
       let springAccel = heightErr * 250 - vAlongN * 32;
+      // Wheels can't grab the ground: never pull the car downward while it's
+      // genuinely launching away from the surface (post-jump), only while riding it.
+      if (springAccel < 0 && vAlongN > 250) springAccel = 0;
       // Clamp for stability
       springAccel = clamp(springAccel, -10000, 10000);
       this.velocity.addScaledVector(hit.normal, springAccel * dt);
@@ -176,8 +189,9 @@ export class Car {
       // Steady-state is unchanged because once aligned, -_up == -hit.normal.
       this.velocity.addScaledVector(hit.normal, -C.STICKY_FORCE * dt);
 
-      // Align car up to surface normal (slerp toward target orientation at ~10 rad/s)
-      alignUpTo(this.quaternion, hit.normal, dt * 10, _q1, _q2);
+      // Align car up to surface normal. 14/s keeps orientation lag ~18° when riding
+      // a fillet at full speed (4.3 rad/s of surface rotation) — enough to stay grounded.
+      alignUpTo(this.quaternion, hit.normal, dt * 14, _q1, _q2);
       // Refresh basis after alignment
       _fwd.copy(LOCAL_X).applyQuaternion(this.quaternion);
       _left.copy(LOCAL_Y).applyQuaternion(this.quaternion);
@@ -227,9 +241,12 @@ export class Car {
         this._jumpHoldT = C.JUMP_HOLD_MAX_TIME;
         this._holdingJump = true;
         this._airTime = 1e-6; // mark as airborne
+        this._jumpedSinceGround = true;
+        this._timeSinceJump = 0;
         this._usedDoubleJump = false;
-        // Prevent suspension from immediately pulling us back down
-        this._groundLockoutT = 0.12;
+        // Prevent suspension from immediately pulling us back down. Long enough for
+        // the car to clear the (generous) suspension ray reach before it can re-ground.
+        this._groundLockoutT = 0.2;
         events.push({ type: 'jump', carId: this.id });
         // Also remember: we are now leaving ground for this step
       }
@@ -282,8 +299,9 @@ export class Car {
         if (this._dodgeTorqueT < 0) this._dodgeTorqueT = 0;
       }
 
-      // Second jump / dodge logic
-      if (jumpPressed && !this._usedDoubleJump && this._airTime <= C.DOUBLE_JUMP_WINDOW) {
+      // Second jump / dodge logic. Window enforcement happens above via _usedDoubleJump —
+      // a car that fell without jumping keeps its flip indefinitely (RL behavior).
+      if (jumpPressed && !this._usedDoubleJump) {
         const hasDir = Math.abs(pitch) > 0.1 || Math.abs(yawIn) > 0.1 || Math.abs(steer) > 0.1;
         if (hasDir) {
           // Dodge.
@@ -386,6 +404,7 @@ export class Car {
         [+halfL, +halfW], [+halfL, -halfW],
         [-halfL, +halfW], [-halfL, -halfW],
       ];
+      let restingContact = false; // chassis touching a floor-ish surface while not grounded
       for (let i = 0; i < 4; i++) {
         const cx = corners[i][0];
         const cy = corners[i][1];
@@ -399,6 +418,7 @@ export class Car {
           const depth = c.depth;
           // Skip near-ground contacts while grounded (suspension handles those)
           if (grounded && n.dot(this._groundNormal) > 0.9) continue;
+          if (!grounded && n.z > 0.7) restingContact = true;
           // Positional correction
           this.position.addScaledVector(n, depth);
           // Velocity response: reflect along normal with restitution, friction tangential
@@ -409,6 +429,28 @@ export class Car {
             // tangent = v - (v·n)n  (using new v)
             _v7.copy(this.velocity).addScaledVector(n, -this.velocity.dot(n));
             this.velocity.addScaledVector(_v7, -0.2);
+          }
+        }
+      }
+
+      // Self-righting: a near-rest car sitting on its side/roof topples back onto its
+      // wheels (real RL cars settle too — flat boxes balancing on an edge feel broken).
+      if (restingContact && this._dodgeTorqueT <= 0 &&
+          this.velocity.lengthSq() < 300 * 300 && this.angularVelocity.lengthSq() < 9) {
+        const upZ = _up.z;
+        if (upZ < 0.95) {
+          // Torque axis rotates car-up toward world +z.
+          _v7.set(_up.y, -_up.x, 0); // up × worldZ: +rotation about this lifts up toward +z
+          const al = _v7.length();
+          // Exactly inverted ⇒ axis degenerates; pick the roll axis so it tips sideways.
+          if (al < 1e-4) _v7.copy(_fwd).setZ(0).normalize();
+          else _v7.multiplyScalar(1 / al);
+          {
+            // Stronger when fully inverted, gentle near upright; capped contribution.
+            const strength = 14 * (1 - upZ * 0.5);
+            this.angularVelocity.addScaledVector(_v7, strength * dt);
+            const w = this.angularVelocity.length();
+            if (w > 3.2) this.angularVelocity.multiplyScalar(3.2 / w);
           }
         }
       }

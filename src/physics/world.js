@@ -179,6 +179,8 @@ export class World {
       car._holdingJump = false;
       car._airTime = 0;
       car._usedDoubleJump = false;
+      car._jumpedSinceGround = false;
+      car._timeSinceJump = 0;
       car._dodgeTorqueT = 0;
       car._jumpPrev = false;
       car._groundLockoutT = 0;
@@ -210,6 +212,8 @@ export class World {
     car._holdingJump = false;
     car._airTime = 0;
     car._usedDoubleJump = false;
+    car._jumpedSinceGround = false;
+    car._timeSinceJump = 0;
     car._dodgeTorqueT = 0;
     car._jumpPrev = false;
     car._groundLockoutT = 0;
