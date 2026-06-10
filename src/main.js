@@ -13,6 +13,7 @@ import { CameraRig } from './render/camera.js';
 import { Effects } from './render/effects.js';
 import { HUD } from './render/hud.js';
 import { SFX } from './audio/sfx.js';
+import { Music } from './audio/music.js';
 
 const canvas = document.getElementById('game-canvas');
 const hudRoot = document.getElementById('hud-root');
@@ -43,6 +44,7 @@ const effects = new Effects(sceneMgr.scene);
 effects.attachPads(boostPads);
 const cameraRig = new CameraRig(sceneMgr.camera);
 const sfx = new SFX(playerCar.id);
+const music = new Music();
 
 let ballCam = true;
 let paused = false;
@@ -83,6 +85,7 @@ function frame(now) {
   if (toggles.ballCam) ballCam = !ballCam;
   if (toggles.pause) { paused = !paused; hud.setPaused(paused); sfx.setPaused(paused); }
   if (toggles.mute) sfx.toggleMute();
+  if (toggles.music) music.toggle();
   if (toggles.help) hud.toggleHelp();
   if (toggles.restart && state.phase === 'over') restartMatch();
 
@@ -110,6 +113,7 @@ function frame(now) {
   cameraRig.update(dt, { car: playerCar, ball: world.ball, ballCam, phase: state.phase });
   hud.update(dt, { state, playerCar, ball: world.ball });
   sfx.update(dt, { playerCar, ball: world.ball, state });
+  music.update(dt, { state });
   sceneMgr.render(dt);
 }
 
@@ -160,6 +164,7 @@ function stepGame(dt) {
   effects.handleEvents(events);
   hud.handleEvents(events);
   sfx.handleEvents(events);
+  music.handleEvents(events);
 }
 
 requestAnimationFrame(frame);

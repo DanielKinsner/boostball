@@ -1,4 +1,9 @@
 // CarVisual — photoreal procedural Octane-ish car. +X forward, +Y left, +Z up.
+// Body is built from an ExtrudeGeometry over a 2D side-profile Shape (the Octane
+// silhouette: low nose, rising over the front wheels, peak at the cabin,
+// tapering tail with a slight rear kick), beveled for rounded sills and
+// extruded across the car's width.
+//
 // Materials: MeshPhysicalMaterial car paint (clearcoat), tinted glass canopy,
 // rubber tires (rough/dark), metallic rims. Restrained HDR emissive accents only
 // where bloom should catch.
@@ -6,10 +11,20 @@ import * as THREE from 'three';
 import { CAR_LENGTH, CAR_WIDTH, CAR_HEIGHT, CAR_REST_Z, TEAM_BLUE } from '../constants.js';
 
 const WHEEL_RADIUS = 17;
+const WHEEL_RADIUS_REAR = 19; // RL rear wheels read slightly chunkier
 const WHEEL_WIDTH = 14;
 // Wheel axle local Z = CAR_REST_Z subtracted from world ground touch point:
 // world axle z = WHEEL_RADIUS → local axle z = WHEEL_RADIUS - CAR_REST_Z ≈ -0.01.
 const WHEEL_AXLE_Z = WHEEL_RADIUS - CAR_REST_Z;
+const WHEEL_AXLE_Z_REAR = WHEEL_RADIUS_REAR - CAR_REST_Z;
+
+// Total visual body length/width/height (the physics hitbox is ~118x84x36).
+// We push the body taller than the hitbox (~36 above chassis center) per RL look —
+// the hitbox itself only defines collisions, not the silhouette.
+const BODY_LENGTH = 118;
+const BODY_WIDTH = 84;
+const BODY_HEIGHT = 36; // above chassis center
+const BODY_FLOOR = -14; // belly clearance (below chassis center)
 
 // Body paint — fully saturated team color (the clearcoat darkens it slightly).
 const BLUE_BODY = 0x0a3a82;
@@ -20,6 +35,69 @@ const ORANGE_ACCENT = 0xffb24d;
 // Scratch
 const _v = new THREE.Vector3();
 const _vFwd = new THREE.Vector3();
+
+/**
+ * Build the Octane-ish side-profile Shape in the local XY plane.
+ * X = car-forward axis. Y here = vertical (will become world Z after rotation).
+ * Returns a closed THREE.Shape suitable for ExtrudeGeometry.
+ */
+function buildOctaneProfile() {
+  const L = BODY_LENGTH;
+  const xF = L * 0.5;   // +xF = front nose
+  const xR = -L * 0.5;  // -xR = rear
+
+  const shape = new THREE.Shape();
+  // Start at the bottom-front splitter edge and trace counter-clockwise.
+  // Bottom (belly) is mostly flat at BODY_FLOOR with a slight rear scoop.
+  shape.moveTo(xF - 4, BODY_FLOOR + 2);
+  // Front splitter — slight forward lip protruding low.
+  shape.lineTo(xF + 2, BODY_FLOOR + 4);
+  // Up the nose tip (chamfered) to the hood line.
+  shape.quadraticCurveTo(xF + 6, BODY_FLOOR + 10, xF + 4, BODY_FLOOR + 16);
+  // Hood rises smoothly over the front wheel hump toward the cabin.
+  shape.bezierCurveTo(
+    xF - 4,  BODY_FLOOR + 26,
+    xF - 18, BODY_FLOOR + 30,
+    xF - 28, BODY_FLOOR + 36,
+  );
+  // Windshield ramp up to the cabin peak (just behind chassis center).
+  shape.bezierCurveTo(
+    xF - 40, BODY_FLOOR + 42,
+    xF - 50, BODY_FLOOR + 48,
+    xF - 56, BODY_HEIGHT + BODY_FLOOR + 4, // peak around mid-cabin
+  );
+  // Cabin roof — gentle dome reaching peak then sloping down to the rear deck.
+  // Cabin peak intentionally sits slightly aft of center for the classic Octane look.
+  const peakX = -L * 0.05;
+  const peakY = BODY_FLOOR + BODY_HEIGHT + 4;
+  shape.bezierCurveTo(
+    -L * 0.18, peakY + 1,
+    peakX + 6, peakY + 2,
+    peakX,     peakY + 2,
+  );
+  // Rear window slope — drops from cabin to rear deck.
+  shape.bezierCurveTo(
+    peakX - 14, peakY,
+    -L * 0.28,  BODY_FLOOR + BODY_HEIGHT - 2,
+    -L * 0.36,  BODY_FLOOR + BODY_HEIGHT - 6,
+  );
+  // Rear deck flattens then kicks up slightly at the very back (the Octane "duck-tail").
+  shape.lineTo(-L * 0.46, BODY_FLOOR + BODY_HEIGHT - 8);
+  shape.quadraticCurveTo(
+    -L * 0.49, BODY_FLOOR + BODY_HEIGHT - 4,
+    xR + 2,    BODY_FLOOR + BODY_HEIGHT - 6,
+  );
+  // Down the rear bumper face.
+  shape.bezierCurveTo(
+    xR - 2, BODY_FLOOR + 22,
+    xR - 4, BODY_FLOOR + 14,
+    xR + 2, BODY_FLOOR + 6,
+  );
+  // Across the rear belly back to start.
+  shape.lineTo(xR + 6, BODY_FLOOR + 2);
+  shape.lineTo(xF - 4, BODY_FLOOR + 2);
+  return shape;
+}
 
 export class CarVisual {
   /** @param {'blue'|'orange'} team */
@@ -42,48 +120,112 @@ export class CarVisual {
       clearcoatRoughness: 0.06,
       envMapIntensity: 1.2,
     });
-    // Slight bevel feel via a slightly-tapered chassis box.
-    const chassisGeom = new THREE.BoxGeometry(CAR_LENGTH * 0.85, CAR_WIDTH * 0.92, CAR_HEIGHT * 0.55);
-    const chassis = new THREE.Mesh(chassisGeom, chassisMat);
-    chassis.position.set(0, 0, -CAR_HEIGHT * 0.05);
-    chassis.castShadow = true;
-    chassis.receiveShadow = true;
-    this.mesh.add(chassis);
 
-    // Wedge nose (front).
-    const noseGeom = new THREE.BoxGeometry(CAR_LENGTH * 0.25, CAR_WIDTH * 0.7, CAR_HEIGHT * 0.35);
-    const nose = new THREE.Mesh(noseGeom, chassisMat);
-    nose.position.set(CAR_LENGTH * 0.42, 0, -CAR_HEIGHT * 0.12);
-    nose.castShadow = true;
-    this.mesh.add(nose);
+    // ----- Main body: extrude the Octane side profile across the car width -----
+    // Build profile in local (x_forward, z_up) plane, then extrude along z and
+    // rotate so extrusion runs along world Y (the car-width axis).
+    const profile = buildOctaneProfile();
+    const extrudeSettings = {
+      depth: BODY_WIDTH,             // extrude width across Y
+      bevelEnabled: true,
+      bevelSegments: 4,
+      bevelSize: 5.5,                // rounded sills (~4-6 uu requested)
+      bevelThickness: 5.5,
+      curveSegments: 10,
+    };
+    const bodyGeom = new THREE.ExtrudeGeometry(profile, extrudeSettings);
+    // ExtrudeGeometry extrudes along +Z in shape-local space. Rotate so the
+    // extrusion axis aligns with car-local +Y (width), and the profile sits in
+    // the local XZ plane (x_forward / z_up).
+    bodyGeom.rotateX(-Math.PI / 2);
+    // Center the extrusion across Y so the car is symmetric.
+    bodyGeom.translate(0, BODY_WIDTH / 2, 0);
+    const body = new THREE.Mesh(bodyGeom, chassisMat);
+    body.castShadow = true;
+    body.receiveShadow = true;
+    this.mesh.add(body);
 
-    // Side skirts / lower fenders — softens the silhouette.
+    // Lower fender / side-skirt insets (dark contrast strip along the sills).
     const skirtMat = new THREE.MeshPhysicalMaterial({
       color: 0x14171c,
-      roughness: 0.35,
+      roughness: 0.4,
       metalness: 0.7,
       clearcoat: 0.6,
       clearcoatRoughness: 0.15,
       envMapIntensity: 1.0,
     });
-    const skirtGeom = new THREE.BoxGeometry(CAR_LENGTH * 0.78, CAR_WIDTH * 0.06, CAR_HEIGHT * 0.32);
-    for (const sy of [-1, 1]) {
-      const sk = new THREE.Mesh(skirtGeom, skirtMat);
-      sk.position.set(-CAR_LENGTH * 0.02, sy * CAR_WIDTH * 0.48, -CAR_HEIGHT * 0.18);
-      sk.castShadow = true;
-      this.mesh.add(sk);
+    {
+      // Thin rectangular sill strip across most of the body length, hugging the side.
+      const sillGeom = new THREE.BoxGeometry(BODY_LENGTH * 0.7, 1.5, 7);
+      for (const sy of [-1, 1]) {
+        const sill = new THREE.Mesh(sillGeom, skirtMat);
+        sill.position.set(-2, sy * (BODY_WIDTH * 0.5 + 0.5), BODY_FLOOR + 6);
+        sill.castShadow = true;
+        this.mesh.add(sill);
+      }
     }
-    // Front bumper splitter
-    const splitter = new THREE.Mesh(
-      new THREE.BoxGeometry(CAR_LENGTH * 0.18, CAR_WIDTH * 0.85, CAR_HEIGHT * 0.1),
-      skirtMat,
-    );
-    splitter.position.set(CAR_LENGTH * 0.46, 0, -CAR_HEIGHT * 0.32);
-    splitter.castShadow = true;
-    this.mesh.add(splitter);
 
-    // Cabin / canopy — dark tinted glossy "glass" (real fresnel via PhysicalMaterial).
-    // Not transmissive (transmission=0 keeps it cheap and prevents seeing through the car).
+    // Front splitter lip — a thin plate hanging just under the nose.
+    {
+      const splitter = new THREE.Mesh(
+        new THREE.BoxGeometry(12, BODY_WIDTH * 0.95, 1.6),
+        skirtMat,
+      );
+      splitter.position.set(BODY_LENGTH * 0.46, 0, BODY_FLOOR + 1.5);
+      splitter.castShadow = true;
+      this.mesh.add(splitter);
+    }
+
+    // Side air intakes — shallow inset boxes behind each front wheel arch.
+    {
+      const intakeMat = new THREE.MeshStandardMaterial({
+        color: 0x05070a,
+        roughness: 0.85,
+        metalness: 0.2,
+      });
+      const intakeGeom = new THREE.BoxGeometry(20, 2, 8);
+      for (const sy of [-1, 1]) {
+        const intake = new THREE.Mesh(intakeGeom, intakeMat);
+        intake.position.set(BODY_LENGTH * 0.12, sy * (BODY_WIDTH * 0.5 + 0.4), BODY_FLOOR + 18);
+        this.mesh.add(intake);
+      }
+    }
+
+    // Wheel arches (visual flares around each wheel well — partial torus segments).
+    {
+      const archMat = new THREE.MeshPhysicalMaterial({
+        color: 0x0a0c11,
+        roughness: 0.55,
+        metalness: 0.45,
+        clearcoat: 0.4,
+        clearcoatRoughness: 0.2,
+        envMapIntensity: 0.9,
+      });
+      const wx = BODY_LENGTH * 0.34;
+      const wxR = -BODY_LENGTH * 0.34;
+      const arcRadius = 22;
+      const arcTube = 3.2;
+      // TorusGeometry(radius, tube, radialSegments, tubularSegments, arc).
+      const archGeom = new THREE.TorusGeometry(arcRadius, arcTube, 6, 14, Math.PI);
+      for (const [cx, cz] of [
+        [wx,  WHEEL_AXLE_Z + 2],
+        [wxR, WHEEL_AXLE_Z_REAR + 2],
+      ]) {
+        for (const sy of [-1, 1]) {
+          const arch = new THREE.Mesh(archGeom, archMat);
+          // Place at wheel center, just outside the body sill.
+          arch.position.set(cx, sy * (BODY_WIDTH * 0.5 - 1), cz);
+          // Torus lies in XY by default; we want its plane vertical (XZ) so the
+          // half-arc lifts upward over the wheel. Rotate around X by π/2.
+          arch.rotation.x = Math.PI / 2;
+          arch.castShadow = true;
+          this.mesh.add(arch);
+        }
+      }
+    }
+
+    // Cabin canopy — dark tinted glossy "glass" pressed onto the cabin peak.
+    // A squashed sphere reads as a curved windscreen/canopy bubble.
     const canopyMat = new THREE.MeshPhysicalMaterial({
       color: 0x05070c,
       roughness: 0.05,
@@ -94,69 +236,107 @@ export class CarVisual {
       ior: 1.5,
       reflectivity: 0.85,
     });
-    const canopyGeom = new THREE.BoxGeometry(CAR_LENGTH * 0.5, CAR_WIDTH * 0.7, CAR_HEIGHT * 0.55);
-    const canopy = new THREE.Mesh(canopyGeom, canopyMat);
-    canopy.position.set(-CAR_LENGTH * 0.02, 0, CAR_HEIGHT * 0.4);
-    canopy.castShadow = true;
-    this.mesh.add(canopy);
+    {
+      const canopyGeom = new THREE.SphereGeometry(1, 18, 12);
+      const canopy = new THREE.Mesh(canopyGeom, canopyMat);
+      // Squashed ellipsoid: long along x, narrow across y, low height.
+      canopy.scale.set(BODY_LENGTH * 0.22, BODY_WIDTH * 0.34, BODY_HEIGHT * 0.32);
+      // Sit on the cabin peak — slightly aft of center.
+      canopy.position.set(-BODY_LENGTH * 0.04, 0, BODY_FLOOR + BODY_HEIGHT * 0.95);
+      canopy.castShadow = true;
+      this.mesh.add(canopy);
+    }
 
-    // Rear spoiler (carbon-fiber-ish dark matte).
+    // Rear spoiler — small wing on twin struts, mounted at the rear deck kick.
     const spoilerMat = new THREE.MeshPhysicalMaterial({
       color: 0x0a0c12,
-      metalness: 0.3,
+      metalness: 0.35,
       roughness: 0.45,
       clearcoat: 0.5,
       clearcoatRoughness: 0.2,
       envMapIntensity: 0.9,
     });
-    const spoiler = new THREE.Mesh(
-      new THREE.BoxGeometry(CAR_LENGTH * 0.16, CAR_WIDTH * 0.95, CAR_HEIGHT * 0.12),
-      spoilerMat,
-    );
-    spoiler.position.set(-CAR_LENGTH * 0.45, 0, CAR_HEIGHT * 0.55);
-    spoiler.castShadow = true;
-    this.mesh.add(spoiler);
-    // Spoiler stilts
-    const stiltGeom = new THREE.BoxGeometry(CAR_LENGTH * 0.04, CAR_WIDTH * 0.05, CAR_HEIGHT * 0.45);
-    for (const sy of [-1, 1]) {
-      const s = new THREE.Mesh(stiltGeom, spoilerMat);
-      s.position.set(-CAR_LENGTH * 0.43, sy * CAR_WIDTH * 0.36, CAR_HEIGHT * 0.3);
-      this.mesh.add(s);
+    {
+      const spoiler = new THREE.Mesh(
+        new THREE.BoxGeometry(11, BODY_WIDTH * 0.78, 2.2),
+        spoilerMat,
+      );
+      spoiler.position.set(-BODY_LENGTH * 0.43, 0, BODY_FLOOR + BODY_HEIGHT + 6);
+      spoiler.castShadow = true;
+      this.mesh.add(spoiler);
+      // Twin struts
+      const strutGeom = new THREE.BoxGeometry(2.4, 2.4, 8);
+      for (const sy of [-1, 1]) {
+        const s = new THREE.Mesh(strutGeom, spoilerMat);
+        s.position.set(-BODY_LENGTH * 0.43, sy * BODY_WIDTH * 0.3, BODY_FLOOR + BODY_HEIGHT + 1);
+        this.mesh.add(s);
+      }
     }
 
-    // Emissive trim stripes along the sides — HDR-bright so bloom catches them
-    // but only the trim, not the whole panel.
+    // Emissive trim stripes along the lower flanks (HDR — bloom catches them).
     const trimMat = new THREE.MeshStandardMaterial({
       color: 0x000000,
       emissive: accent,
-      emissiveIntensity: 4.0, // HDR — feeds bloom (threshold 1.0)
+      emissiveIntensity: 4.0,
       toneMapped: true,
     });
-    const trimGeom = new THREE.BoxGeometry(CAR_LENGTH * 0.9, 2, 3);
-    for (const sy of [-1, 1]) {
-      const t = new THREE.Mesh(trimGeom, trimMat);
-      t.position.set(0, sy * (CAR_WIDTH * 0.46), 0);
-      this.mesh.add(t);
+    {
+      const trimGeom = new THREE.BoxGeometry(BODY_LENGTH * 0.78, 1.2, 1.8);
+      for (const sy of [-1, 1]) {
+        const t = new THREE.Mesh(trimGeom, trimMat);
+        t.position.set(-2, sy * (BODY_WIDTH * 0.5 + 0.9), BODY_FLOOR + 12);
+        this.mesh.add(t);
+      }
     }
-    // Roof accent line
-    const roofTrim = new THREE.Mesh(
-      new THREE.BoxGeometry(CAR_LENGTH * 0.45, 2, 2),
-      trimMat,
-    );
-    roofTrim.position.set(0, 0, CAR_HEIGHT * 0.71);
-    this.mesh.add(roofTrim);
+    // Hood accent stripe up the center (subtle — adds team identity to the back).
+    {
+      const hoodTrim = new THREE.Mesh(
+        new THREE.BoxGeometry(BODY_LENGTH * 0.18, 1.5, 1.0),
+        trimMat,
+      );
+      hoodTrim.position.set(BODY_LENGTH * 0.28, 0, BODY_FLOOR + BODY_HEIGHT * 0.85);
+      this.mesh.add(hoodTrim);
+    }
 
-    // Headlight cluster (small but HDR — feeds bloom subtly).
-    const headlightMat = new THREE.MeshStandardMaterial({
-      color: 0x101418,
-      emissive: 0xfff5d8,
-      emissiveIntensity: 3.0,
-    });
-    const hlGeom = new THREE.BoxGeometry(CAR_LENGTH * 0.04, CAR_WIDTH * 0.18, CAR_HEIGHT * 0.18);
-    for (const sy of [-1, 1]) {
-      const hl = new THREE.Mesh(hlGeom, headlightMat);
-      hl.position.set(CAR_LENGTH * 0.53, sy * CAR_WIDTH * 0.28, CAR_HEIGHT * 0.05);
-      this.mesh.add(hl);
+    // Headlight cluster — small HDR emissive blocks set into the nose.
+    {
+      const headlightMat = new THREE.MeshStandardMaterial({
+        color: 0x101418,
+        emissive: 0xfff5d8,
+        emissiveIntensity: 3.0,
+      });
+      const hlGeom = new THREE.BoxGeometry(2.5, 12, 4);
+      for (const sy of [-1, 1]) {
+        const hl = new THREE.Mesh(hlGeom, headlightMat);
+        hl.position.set(BODY_LENGTH * 0.49, sy * BODY_WIDTH * 0.3, BODY_FLOOR + 22);
+        this.mesh.add(hl);
+      }
+    }
+
+    // Antenna (thin cylinder + small sphere bobble). Kept static — no per-frame
+    // allocation, no rotation; reads as a small detail on the rear deck.
+    {
+      const antennaMat = new THREE.MeshStandardMaterial({
+        color: 0x14161a,
+        metalness: 0.6,
+        roughness: 0.5,
+      });
+      const tipMat = new THREE.MeshStandardMaterial({
+        color: 0x101418,
+        emissive: accent,
+        emissiveIntensity: 1.4,
+      });
+      const antennaShaft = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.4, 0.4, 12, 6),
+        antennaMat,
+      );
+      // Cylinder default axis is +Y; rotate so it stands vertically (+Z).
+      antennaShaft.rotation.x = Math.PI / 2;
+      antennaShaft.position.set(-BODY_LENGTH * 0.30, BODY_WIDTH * 0.30, BODY_FLOOR + BODY_HEIGHT + 6);
+      this.mesh.add(antennaShaft);
+      const tip = new THREE.Mesh(new THREE.SphereGeometry(1.0, 8, 6), tipMat);
+      tip.position.set(-BODY_LENGTH * 0.30, BODY_WIDTH * 0.30, BODY_FLOOR + BODY_HEIGHT + 12);
+      this.mesh.add(tip);
     }
 
     // Rear boost nozzle — dark metal w/ subtle hot inner emissive.
@@ -172,19 +352,22 @@ export class CarVisual {
       emissive: 0xff7a1a,
       emissiveIntensity: 2.5,
     });
-    const nozzleGeom = new THREE.CylinderGeometry(8, 10, 14, 16);
-    this.nozzle = new THREE.Mesh(nozzleGeom, nozzleMat);
-    this.nozzle.rotation.z = Math.PI / 2;
-    this.nozzle.position.set(-CAR_LENGTH * 0.5 - 6, 0, 0);
-    this.mesh.add(this.nozzle);
-    // Inner glow disc just behind the nozzle.
-    const nozzleInner = new THREE.Mesh(
-      new THREE.CylinderGeometry(6, 6, 1, 16),
-      nozzleInnerMat,
-    );
-    nozzleInner.rotation.z = Math.PI / 2;
-    nozzleInner.position.set(-CAR_LENGTH * 0.5 - 12, 0, 0);
-    this.mesh.add(nozzleInner);
+    {
+      const nozzleGeom = new THREE.CylinderGeometry(7, 9, 12, 16);
+      this.nozzle = new THREE.Mesh(nozzleGeom, nozzleMat);
+      // Cylinder axis defaults to +Y; rotate to +X so it points rearward.
+      this.nozzle.rotation.z = Math.PI / 2;
+      this.nozzle.position.set(-BODY_LENGTH * 0.5 - 4, 0, BODY_FLOOR + 14);
+      this.mesh.add(this.nozzle);
+
+      const nozzleInner = new THREE.Mesh(
+        new THREE.CylinderGeometry(5, 5, 1, 16),
+        nozzleInnerMat,
+      );
+      nozzleInner.rotation.z = Math.PI / 2;
+      nozzleInner.position.set(-BODY_LENGTH * 0.5 - 9.5, 0, BODY_FLOOR + 14);
+      this.mesh.add(nozzleInner);
+    }
 
     // --- Wheels: rubber tires + metallic rims ---
     const tireMat = new THREE.MeshPhysicalMaterial({
@@ -209,27 +392,27 @@ export class CarVisual {
       emissive: accent,
       emissiveIntensity: 1.8,
     });
-    const tireGeom = new THREE.CylinderGeometry(WHEEL_RADIUS, WHEEL_RADIUS, WHEEL_WIDTH, 20);
-    const rimGeom = new THREE.CylinderGeometry(WHEEL_RADIUS * 0.62, WHEEL_RADIUS * 0.62, WHEEL_WIDTH + 0.6, 14);
-    const rimAccentGeom = new THREE.CylinderGeometry(WHEEL_RADIUS * 0.3, WHEEL_RADIUS * 0.3, WHEEL_WIDTH + 1, 12);
 
-    // Wheel local positions (car local: +X forward, +Y left).
-    const wx = CAR_LENGTH * 0.36;
-    const wy = CAR_WIDTH * 0.45;
+    const wxF = BODY_LENGTH * 0.36;
+    const wxR = -BODY_LENGTH * 0.34;
+    const wy = BODY_WIDTH * 0.46;
     /** @type {Array<{mesh: THREE.Group, isFront: boolean, side: number, spinMesh: THREE.Mesh}>} */
     this.wheels = [];
     const wheelDefs = [
-      { x: wx, y: wy, isFront: true, side: 1 },
-      { x: wx, y: -wy, isFront: true, side: -1 },
-      { x: -wx, y: wy, isFront: false, side: 1 },
-      { x: -wx, y: -wy, isFront: false, side: -1 },
+      { x: wxF, y:  wy, isFront: true,  side:  1, r: WHEEL_RADIUS,      axleZ: WHEEL_AXLE_Z },
+      { x: wxF, y: -wy, isFront: true,  side: -1, r: WHEEL_RADIUS,      axleZ: WHEEL_AXLE_Z },
+      { x: wxR, y:  wy, isFront: false, side:  1, r: WHEEL_RADIUS_REAR, axleZ: WHEEL_AXLE_Z_REAR },
+      { x: wxR, y: -wy, isFront: false, side: -1, r: WHEEL_RADIUS_REAR, axleZ: WHEEL_AXLE_Z_REAR },
     ];
     for (const wd of wheelDefs) {
       // Outer group: steers (yaw).
       const steerGroup = new THREE.Group();
-      steerGroup.position.set(wd.x, wd.y, WHEEL_AXLE_Z);
+      steerGroup.position.set(wd.x, wd.y, wd.axleZ);
       // Inner group: rotates the wheel cylinder so its axis aligns with car +Y, then spins around that axle.
       const spinGroup = new THREE.Group();
+      const tireGeom = new THREE.CylinderGeometry(wd.r, wd.r, WHEEL_WIDTH, 20);
+      const rimGeom = new THREE.CylinderGeometry(wd.r * 0.62, wd.r * 0.62, WHEEL_WIDTH + 0.6, 14);
+      const rimAccentGeom = new THREE.CylinderGeometry(wd.r * 0.3, wd.r * 0.3, WHEEL_WIDTH + 1, 12);
       const tire = new THREE.Mesh(tireGeom, tireMat);
       tire.castShadow = true;
       spinGroup.add(tire);
@@ -239,7 +422,13 @@ export class CarVisual {
       spinGroup.add(rimAcc);
       steerGroup.add(spinGroup);
       this.mesh.add(steerGroup);
-      this.wheels.push({ mesh: steerGroup, isFront: wd.isFront, side: wd.side, spinMesh: spinGroup });
+      this.wheels.push({
+        mesh: steerGroup,
+        isFront: wd.isFront,
+        side: wd.side,
+        spinMesh: spinGroup,
+        radius: wd.r,
+      });
     }
 
     // Wheel spin accumulator (radians).
@@ -270,6 +459,8 @@ export class CarVisual {
     _vFwd.copy(car.forward);
     const fwdSpeed = car.velocity.dot(_vFwd);
     // Wheel angular speed = fwdSpeed / radius. Spin around local Y of spinGroup.
+    // Use the small wheel radius as the reference; rear wheels under-spin a hair
+    // (visually negligible at game speeds).
     const dAng = (fwdSpeed / WHEEL_RADIUS) * dt;
     this._wheelAngle += dAng;
 
@@ -286,12 +477,12 @@ export class CarVisual {
       if (w.isFront) {
         w.mesh.rotation.z = this._steerAngle;
       }
-      // Roll: see geometric notes in prior revision — sign flipped to roll forward
-      // with positive forward speed.
+      // Roll: sign flipped so positive forward speed rolls the wheel forward.
       w.spinMesh.rotation.y = -this._wheelAngle;
     }
 
     void _v;
+    void CAR_LENGTH; void CAR_WIDTH; void CAR_HEIGHT;
   }
 
   /**
@@ -302,8 +493,8 @@ export class CarVisual {
    */
   nozzleWorldPos(out) {
     const target = out || _v;
-    // Local nozzle tip in car space: x ≈ -CAR_LENGTH*0.5 - 13 (one cylinder length past the nozzle base).
-    target.set(-CAR_LENGTH * 0.5 - 13, 0, 0);
+    // Local nozzle tip in car space: just past the rear of the body, at nozzle height.
+    target.set(-BODY_LENGTH * 0.5 - 11, 0, BODY_FLOOR + 14);
     target.applyQuaternion(this.mesh.quaternion);
     target.add(this.mesh.position);
     return target;

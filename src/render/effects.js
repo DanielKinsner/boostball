@@ -334,15 +334,35 @@ export class Effects {
     this.boostPads = boostPads;
     const group = new THREE.Group();
     group.name = 'boostPads';
-    const padDiscGeom = new THREE.CircleGeometry(SMALL_PAD_RADIUS, 24);
-    const padOrbGeom = new THREE.CylinderGeometry(BIG_PAD_RADIUS * 0.55, BIG_PAD_RADIUS * 0.75, PAD_HEIGHT, 16);
+    // Pad visuals are intentionally MUCH smaller than the pickup-trigger radii
+    // (SMALL_PAD_RADIUS=144, BIG_PAD_RADIUS=208 are collision-only). Real RL pads
+    // read as small markers on the floor with a faint ground halo.
+    //
+    // Small pad: low diamond puck ~28 uu radius, ~26 tall, on a 40 uu base ring.
+    // Big pad:   glowing orb ~55 uu diameter, floating ~80 uu up on a small
+    //            pedestal, with a soft 70 uu ground ring.
+    const SMALL_PAD_VIS_R = 28;
+    const SMALL_PAD_VIS_H = 26;
+    const SMALL_PAD_BASE_R = 40;
+    const BIG_PAD_ORB_R = 27.5;     // diameter ≈ 55
+    const BIG_PAD_ORB_Z = 80;       // float height of orb center
+    const BIG_PAD_GROUND_RING_R = 70;
+    const BIG_PAD_PED_R = 14;
+    const BIG_PAD_PED_H = 6;
+    // Bipyramid (diamond) puck for small pads — cone + inverted cone via OctahedronGeometry
+    // scaled flat. OctahedronGeometry(1) is a unit diamond; scale gives the puck shape.
+    const smallPadGeom = new THREE.OctahedronGeometry(1, 0);
+    const smallBaseGeom = new THREE.RingGeometry(SMALL_PAD_BASE_R * 0.55, SMALL_PAD_BASE_R, 24);
+    const bigPadGeom = new THREE.SphereGeometry(BIG_PAD_ORB_R, 18, 12);
+    const bigPedGeom = new THREE.CylinderGeometry(BIG_PAD_PED_R, BIG_PAD_PED_R * 1.4, BIG_PAD_PED_H, 16);
+    const bigRingGeom = new THREE.RingGeometry(BIG_PAD_GROUND_RING_R * 0.55, BIG_PAD_GROUND_RING_R, 28);
     for (const pad of boostPads.pads) {
       const isBig = pad.big;
       const color = isBig ? 0xffd84a : 0xffc04a;
       const mat = new THREE.MeshStandardMaterial({
         color: 0x161208,
         emissive: color,
-        emissiveIntensity: 1.2, // softer, less neon
+        emissiveIntensity: isBig ? 1.6 : 1.3,
         transparent: true,
         opacity: 1,
         side: THREE.DoubleSide,
@@ -350,29 +370,55 @@ export class Effects {
       const ringMat = new THREE.MeshBasicMaterial({
         color,
         transparent: true,
-        opacity: 0.4, // softer halo on the floor
+        opacity: 0.4,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
         side: THREE.DoubleSide,
       });
       let primary;
       let ring = null;
+      let pedestal = null;
       if (isBig) {
-        primary = new THREE.Mesh(padOrbGeom, mat);
-        primary.rotation.x = Math.PI / 2;
-        primary.position.set(pad.position.x, pad.position.y, PAD_HEIGHT / 2);
-        // Glowing base ring on the ground
-        const ringGeom = new THREE.RingGeometry(BIG_PAD_RADIUS * 0.5, BIG_PAD_RADIUS * 1.05, 28);
-        ring = new THREE.Mesh(ringGeom, ringMat);
+        primary = new THREE.Mesh(bigPadGeom, mat);
+        primary.position.set(pad.position.x, pad.position.y, BIG_PAD_ORB_Z);
+        // Small pedestal under the floating orb.
+        const pedMat = new THREE.MeshStandardMaterial({
+          color: 0x1a160a,
+          emissive: color,
+          emissiveIntensity: 0.4,
+        });
+        pedestal = new THREE.Mesh(bigPedGeom, pedMat);
+        // CylinderGeometry's axis is +Y; rotate so the cylinder stands up along +Z.
+        pedestal.rotation.x = Math.PI / 2;
+        pedestal.position.set(pad.position.x, pad.position.y, BIG_PAD_PED_H * 0.5 + 1);
+        // Soft 70 uu ground ring.
+        ring = new THREE.Mesh(bigRingGeom, ringMat);
         ring.position.set(pad.position.x, pad.position.y, 2);
       } else {
-        primary = new THREE.Mesh(padDiscGeom, mat);
-        primary.position.set(pad.position.x, pad.position.y, 4);
+        primary = new THREE.Mesh(smallPadGeom, mat);
+        // Squash the diamond into a wide low puck: half-width SMALL_PAD_VIS_R, half-height SMALL_PAD_VIS_H/2.
+        primary.scale.set(SMALL_PAD_VIS_R, SMALL_PAD_VIS_R, SMALL_PAD_VIS_H * 0.5);
+        primary.position.set(pad.position.x, pad.position.y, SMALL_PAD_VIS_H * 0.5 + 1);
+        // Faint 40 uu base ring on the floor.
+        ring = new THREE.Mesh(smallBaseGeom, ringMat);
+        ring.material = ringMat;
+        ring.position.set(pad.position.x, pad.position.y, 1.5);
       }
       group.add(primary);
+      if (pedestal) group.add(pedestal);
       if (ring) group.add(ring);
-      this.padMeshes.push({ pad, mesh: primary, ring, mat, ringMat, baseIntensity: 1.2 });
+      this.padMeshes.push({
+        pad,
+        mesh: primary,
+        ring,
+        pedestal,
+        mat,
+        ringMat,
+        baseIntensity: mat.emissiveIntensity,
+      });
     }
+    // Keep the pickup-radius constants exported & in scope (collision/physics use them).
+    void SMALL_PAD_RADIUS; void BIG_PAD_RADIUS; void PAD_HEIGHT;
     this.scene.add(group);
   }
 

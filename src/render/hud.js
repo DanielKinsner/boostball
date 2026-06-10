@@ -19,7 +19,8 @@ const HELP_ROWS = [
   ['Handbrake', 'X', 'X'],
   ['Ball Cam', 'C', 'Y'],
   ['Pause', 'P  /  Esc', 'Start'],
-  ['Mute', 'M', '—'],
+  ['Mute SFX', 'M', '—'],
+  ['Music on/off', 'N', '—'],
   ['Help', 'H', '—'],
   ['Restart', 'Enter (after match)', '—'],
 ];

@@ -14,6 +14,7 @@ const TOGGLE_KEYS = new Set([
   'KeyP',
   'Escape',
   'KeyM',
+  'KeyN',
   'KeyH',
   'Enter',
 ]);
@@ -48,6 +49,7 @@ export class InputManager {
       ballCam: false,
       pause: false,
       mute: false,
+      music: false,
       help: false,
       restart: false,
     };
@@ -61,6 +63,7 @@ export class InputManager {
         if (e.code === 'KeyC') this._pendingToggles.ballCam = true;
         else if (e.code === 'KeyP' || e.code === 'Escape') this._pendingToggles.pause = true;
         else if (e.code === 'KeyM') this._pendingToggles.mute = true;
+        else if (e.code === 'KeyN') this._pendingToggles.music = true;
         else if (e.code === 'KeyH') this._pendingToggles.help = true;
         // Restart edge is only acted on by main.js when state.phase === 'over'.
         // Enter presses during play are intentional no-ops; InputManager stays
@@ -171,12 +174,14 @@ export class InputManager {
       ballCam: this._pendingToggles.ballCam,
       pause: this._pendingToggles.pause,
       mute: this._pendingToggles.mute,
+      music: this._pendingToggles.music,
       help: this._pendingToggles.help,
       restart: this._pendingToggles.restart,
     };
     this._pendingToggles.ballCam = false;
     this._pendingToggles.pause = false;
     this._pendingToggles.mute = false;
+    this._pendingToggles.music = false;
     this._pendingToggles.help = false;
     this._pendingToggles.restart = false;
     return out;
