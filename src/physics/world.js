@@ -17,6 +17,11 @@ import {
   PHYSICS_SUBSTEPS,
   BOOST_SPAWN_AMOUNT,
   BALL_RADIUS,
+  ARENA_HALF_LENGTH,
+  GOAL_HALF_WIDTH,
+  GOAL_HEIGHT,
+  GRAVITY,
+  TEAM_BLUE,
 } from '../constants.js';
 import { Ball } from './ball.js';
 import { goalScored } from './arena.js';
@@ -96,10 +101,22 @@ export class World {
         }
         const result = collideCarBall(car, this.ball);
         if (result) {
+          const meta = classifyBallHit(car, this.ball, result);
           events.push({
             type: 'ballHit',
             carId: car.id,
+            team: car.team,
             speed: result.speed,
+            postBallSpeed: result.postBallSpeed,
+            power: result.power,
+            aerial: result.aerial,
+            dodge: result.dodge,
+            soft: result.soft,
+            front: result.front,
+            shot: meta.shot,
+            save: meta.save,
+            clear: meta.clear,
+            mechanic: meta.mechanic,
             position: result.position,
           });
         }
@@ -223,4 +240,54 @@ export class World {
     car.isSupersonic = false;
     car._ballContactCooldown = 0;
   }
+}
+
+function classifyBallHit(car, ball, result) {
+  const shotSign = car.team === TEAM_BLUE ? 1 : -1;
+  const ownSign = -shotSign;
+  const shot = isShotOnTarget(ball.position, ball.velocity, shotSign, result.postBallSpeed);
+
+  const onOwnHalf = ball.position.y * ownSign > ARENA_HALF_LENGTH * 0.45;
+  const nearOwnMouth =
+    onOwnHalf &&
+    Math.abs(ball.position.y) > ARENA_HALF_LENGTH * 0.58 &&
+    Math.abs(ball.position.x) < GOAL_HALF_WIDTH * 2.2;
+  const wasThreatening =
+    nearOwnMouth &&
+    result.preBallVelY * ownSign > 650;
+  const nowRelieved =
+    result.postBallVelY * ownSign < 250 ||
+    result.postBallVelY * shotSign > 450;
+  const save = wasThreatening && nowRelieved;
+  const clear = !save && onOwnHalf && result.postBallVelY * shotSign > 700;
+
+  let mechanic = 'touch';
+  if (save) mechanic = 'save';
+  else if (shot) mechanic = 'shot';
+  else if (result.dodge && result.power > 0.35) mechanic = 'flip';
+  else if (result.aerial && result.power > 0.25) mechanic = 'aerial';
+  else if (clear) mechanic = 'clear';
+  else if (result.soft) mechanic = 'soft';
+  else if (result.power > 0.72) mechanic = 'power';
+
+  return { shot, save, clear, mechanic };
+}
+
+function isShotOnTarget(position, velocity, sign, speed) {
+  if (speed < 900) return false;
+  if (velocity.y * sign <= 650) return false;
+
+  const goalY = sign * ARENA_HALF_LENGTH;
+  const distToGoalPlane = goalY - position.y;
+  if (distToGoalPlane * sign <= 0) return false;
+  const t = distToGoalPlane / velocity.y;
+  if (!isFinite(t) || t < 0 || t > 3.5) return false;
+
+  const xAtGoal = position.x + velocity.x * t;
+  const zAtGoal = position.z + velocity.z * t - 0.5 * GRAVITY * t * t;
+  return (
+    Math.abs(xAtGoal) < GOAL_HALF_WIDTH * 1.22 &&
+    zAtGoal > BALL_RADIUS * 0.35 &&
+    zAtGoal < GOAL_HEIGHT + BALL_RADIUS * 1.2
+  );
 }

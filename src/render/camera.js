@@ -6,8 +6,10 @@ import {
   SUPERSONIC_ON,
 } from '../constants.js';
 
-const BALL_CAM_DIST = 380;
-const BALL_CAM_HEIGHT = 115;
+const BALL_CAM_DIST_MIN = 400;
+const BALL_CAM_DIST_MAX = 650;
+const BALL_CAM_HEIGHT_MIN = 125;
+const BALL_CAM_HEIGHT_MAX = 225;
 const CHASE_DIST = 380;
 const CHASE_HEIGHT = 135;
 const CHASE_LOOK_AHEAD = 300;
@@ -19,7 +21,7 @@ const SOFT_X = 4350;
 const SOFT_Y = 5500;
 
 const FOV_BASE = 80;
-const FOV_SUPERSONIC = 86;
+const FOV_SUPERSONIC = 88;
 
 // Scratch — module-level to avoid per-frame allocs.
 const _idealPos = new THREE.Vector3();
@@ -75,7 +77,7 @@ export class CameraRig {
     if (phase === 'goalPause') {
       this._orbit(dt, _ballPos, 900, 350);
       this._applySoftClamps();
-      this._updateFov(dt, false);
+      this._updateFov(dt, 0);
       this._applyShake(dt);
       return;
     }
@@ -83,7 +85,7 @@ export class CameraRig {
     if (car.isDemolished) {
       this._orbit(dt, _ballPos, 1100, 420);
       this._applySoftClamps();
-      this._updateFov(dt, false);
+      this._updateFov(dt, 0);
       this._applyShake(dt);
       return;
     }
@@ -101,10 +103,15 @@ export class CameraRig {
       }
       _dir.normalize();
       this._swivelToward(_dir, dt);
+      const carBallDist = Math.min(1, _carPos.distanceTo(_ballPos) / 4200);
+      const speedT = Math.min(1, car.velocity.length() / SUPERSONIC_ON);
+      const camDist = BALL_CAM_DIST_MIN + (BALL_CAM_DIST_MAX - BALL_CAM_DIST_MIN) * (carBallDist * 0.72 + speedT * 0.28);
+      const camHeight = BALL_CAM_HEIGHT_MIN + (BALL_CAM_HEIGHT_MAX - BALL_CAM_HEIGHT_MIN) * (carBallDist * 0.55 + speedT * 0.45);
       _idealPos.copy(_carPos)
-        .addScaledVector(this._boomDir, BALL_CAM_DIST)
-        .add(_v3(0, 0, BALL_CAM_HEIGHT));
-      _lookTarget.copy(_ballPos);
+        .addScaledVector(this._boomDir, camDist)
+        .add(_v3(0, 0, camHeight));
+      const leadT = Math.min(0.12, ball.velocity.length() / 6000 * 0.12);
+      _lookTarget.copy(_ballPos).addScaledVector(ball.velocity, leadT);
     } else {
       // CHASE: behind car facing, blended with velocity direction at high speed.
       _fwd.copy(car.forward);
@@ -140,8 +147,7 @@ export class CameraRig {
     this.camera.lookAt(this._lookSmooth);
 
     // FOV kick when supersonic.
-    const isSuper = car.velocity.length() >= SUPERSONIC_ON;
-    this._updateFov(dt, isSuper);
+    this._updateFov(dt, car.velocity.length());
     this._applyShake(dt);
   }
 
@@ -183,8 +189,11 @@ export class CameraRig {
     void ARENA_HALF_WIDTH; void ARENA_HALF_LENGTH;
   }
 
-  _updateFov(dt, isSuper) {
-    const target = isSuper ? FOV_SUPERSONIC : FOV_BASE;
+  _updateFov(dt, speed) {
+    const speedT = Math.min(1, Math.max(0, speed / SUPERSONIC_ON));
+    const target = speed >= SUPERSONIC_ON
+      ? FOV_SUPERSONIC
+      : FOV_BASE + (FOV_SUPERSONIC - FOV_BASE - 3) * speedT;
     const k = 1 - Math.exp(-4 * dt);
     this._fov += (target - this._fov) * k;
     if (Math.abs(this._fov - this.camera.fov) > 0.01) {

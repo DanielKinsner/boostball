@@ -30,11 +30,26 @@ const BALL_MASS = C.BALL_MASS;
 const CAR_REACTION_FACTOR = 0.35; // how much the car bumps back from the ball collision
 const SPIN_K = 0.0005;
 
+function clamp01(x) {
+  return x < 0 ? 0 : x > 1 ? 1 : x;
+}
+
 /**
  * Detect OBB(car)-sphere(ball) collision, depenetrate ball, apply impulse + Psyonix kick.
  * @param {import('./car.js').Car} car
  * @param {import('./ball.js').Ball} ball
- * @returns {null | { speed: number, position: THREE.Vector3 }}
+ * @returns {null | {
+ *   speed: number,
+ *   position: THREE.Vector3,
+ *   postBallSpeed: number,
+ *   power: number,
+ *   aerial: boolean,
+ *   dodge: boolean,
+ *   soft: boolean,
+ *   front: boolean,
+ *   preBallVelY: number,
+ *   postBallVelY: number,
+ * }}
  */
 export function collideCarBall(car, ball) {
   if (!car || !ball) return null;
@@ -71,6 +86,9 @@ export function collideCarBall(car, ball) {
   if (distSq >= r * r) return null;
 
   let dist = Math.sqrt(distSq);
+  let nLocalX = 0;
+  let nLocalY = 0;
+  let nLocalZ = 0;
   // Normal points from car surface to ball center (in world).
   // World contact normal = world(local diff vector)/dist; if dist ~0 (ball center inside OBB),
   // pick the axis with smallest penetration and push out along it.
@@ -79,7 +97,6 @@ export function collideCarBall(car, ball) {
     const penX = hl - Math.abs(lx);
     const penY = hw - Math.abs(ly);
     const penZ = hh - Math.abs(lz);
-    let nLocalX = 0, nLocalY = 0, nLocalZ = 0;
     if (penX < penY && penX < penZ) nLocalX = lx >= 0 ? 1 : -1;
     else if (penY < penZ) nLocalY = ly >= 0 ? 1 : -1;
     else nLocalZ = lz >= 0 ? 1 : -1;
@@ -88,10 +105,13 @@ export function collideCarBall(car, ball) {
       .addScaledVector(_up, nLocalZ);
     dist = 0;
   } else {
+    nLocalX = dx / dist;
+    nLocalY = dy / dist;
+    nLocalZ = dz / dist;
     // Build world normal from local components (dx,dy,dz) projected onto car basis
-    _normalWorld.copy(_fwd).multiplyScalar(dx / dist)
-      .addScaledVector(_left, dy / dist)
-      .addScaledVector(_up, dz / dist);
+    _normalWorld.copy(_fwd).multiplyScalar(nLocalX)
+      .addScaledVector(_left, nLocalY)
+      .addScaledVector(_up, nLocalZ);
   }
 
   const penetration = r - dist;
@@ -119,14 +139,28 @@ export function collideCarBall(car, ball) {
     ball.velocity.y - vCarAtContactY,
     ball.velocity.z - vCarAtContactZ,
   );
+  const preBallVelY = ball.velocity.y;
   const relSpeed = _relVel.length();
   const vNormal = _relVel.dot(_normalWorld);
+
+  // Touch characterization:
+  // - flip/dodge touches should pop harder, matching the RL advice to dodge into shots.
+  // - underside/wheel-region contacts should be softer than hood/nose contacts.
+  // - nose/front contacts read as cleaner power touches than side scrapes.
+  const dodgeTouch = (car._dodgeTorqueT || 0) > 0.02;
+  const aerialTouch = !car.isOnGround || ball.position.z > C.BALL_RADIUS + 180;
+  const softTouch = nLocalZ < -0.45 || cz < -hh + 2;
+  const frontTouch = _normalWorld.dot(_fwd) > 0.55;
+  const contactPowerScale =
+    (softTouch ? 0.72 : 1.0) *
+    (dodgeTouch ? 1.18 : 1.0) *
+    (frontTouch ? 1.06 : 1.0);
 
   // Normal impulse with masses 180/30; restitution 0.
   // J = -(1+e) * vNormal / (1/m_ball + 1/m_car)
   if (vNormal < 0) {
     const denom = (1 / BALL_MASS) + (1 / CAR_MASS);
-    const j = -(1 + RESTITUTION) * vNormal / denom;
+    const j = -(1 + RESTITUTION) * vNormal / denom * contactPowerScale;
     // Apply to ball
     ball.velocity.addScaledVector(_normalWorld, j / BALL_MASS);
     // Reaction on car (scaled down)
@@ -145,7 +179,7 @@ export function collideCarBall(car, ball) {
     if (psyLen > 1e-6) {
       _psyDir.multiplyScalar(1 / psyLen);
       const scale = C.curveLerp(C.BALL_HIT_SCALE_CURVE, relSpeed);
-      const mag = relSpeed * scale;
+      const mag = relSpeed * scale * contactPowerScale;
       ball.velocity.addScaledVector(_psyDir, mag);
     }
     car._ballContactCooldown = 0.05; // 50 ms hit-event gate
@@ -170,7 +204,21 @@ export function collideCarBall(car, ball) {
     ball.velocity.multiplyScalar(C.BALL_MAX_SPEED / bSpeed);
   }
 
-  return { speed: relSpeed, position: _contactWorld.clone() };
+  const postBallSpeed = ball.velocity.length();
+  const power = clamp01(((relSpeed * contactPowerScale) - 450) / 2100);
+
+  return {
+    speed: relSpeed,
+    position: _contactWorld.clone(),
+    postBallSpeed,
+    power,
+    aerial: aerialTouch,
+    dodge: dodgeTouch,
+    soft: softTouch,
+    front: frontTouch,
+    preBallVelY,
+    postBallVelY: ball.velocity.y,
+  };
 }
 
 function clamp(x, lo, hi) {

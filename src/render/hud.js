@@ -168,6 +168,52 @@ const CSS = `
   text-shadow: 0 1px 2px rgba(0,0,0,0.7);
 }
 
+/* ---- Mechanic feedback ---- */
+.rc-mechanic-feed {
+  position: absolute; top: 88px; left: 50%;
+  transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 7px;
+  min-width: 320px;
+}
+.rc-mechanic {
+  min-width: 230px;
+  padding: 7px 18px 8px;
+  text-align: center;
+  transform: skewX(-10deg);
+  border-top: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  background: linear-gradient(90deg, rgba(3,6,12,0), rgba(3,6,12,0.78) 18%, rgba(3,6,12,0.78) 82%, rgba(3,6,12,0));
+  filter: drop-shadow(0 8px 16px rgba(0,0,0,0.45));
+  animation: rc-mechanic-pop 1.15s ease-out forwards;
+}
+.rc-mechanic span,
+.rc-mechanic small {
+  display: block;
+  transform: skewX(10deg);
+}
+.rc-mechanic span {
+  font-size: 21px; line-height: 1;
+  font-weight: 900; font-style: italic; letter-spacing: 4px;
+  text-shadow: 0 0 14px currentColor, 0 2px 8px rgba(0,0,0,0.7);
+}
+.rc-mechanic small {
+  margin-top: 4px;
+  font-size: 9px; line-height: 1;
+  font-weight: 800; letter-spacing: 3px;
+  color: rgba(255,255,255,0.76);
+}
+.rc-mechanic.rc-blue { color: #58caff; }
+.rc-mechanic.rc-orange { color: #ffad55; }
+.rc-mechanic.rc-gold { color: #ffd84a; }
+.rc-mechanic.rc-green { color: #b9ff7a; }
+.rc-mechanic.rc-white { color: #f1f8ff; }
+@keyframes rc-mechanic-pop {
+  0%   { opacity: 0; transform: translateY(-8px) skewX(-10deg) scale(0.92); }
+  12%  { opacity: 1; transform: translateY(0) skewX(-10deg) scale(1.04); }
+  72%  { opacity: 1; transform: translateY(0) skewX(-10deg) scale(1); }
+  100% { opacity: 0; transform: translateY(-14px) skewX(-10deg) scale(0.98); }
+}
+
 /* ---- Overlays ---- */
 .rc-overlay {
   position: absolute; inset: 0;
@@ -438,6 +484,10 @@ export class HUD {
     hint.textContent = 'H — HELP';
     this.el.appendChild(hint);
 
+    this._mechanicFeed = document.createElement('div');
+    this._mechanicFeed.className = 'rc-mechanic-feed';
+    this.el.appendChild(this._mechanicFeed);
+
     // ---- Overlays ----
     this._countdownOverlay = this._makeOverlay();
     this._countdownEl = document.createElement('div');
@@ -508,6 +558,7 @@ export class HUD {
 
     // Demo overlay timer.
     this._demoT = 0;
+    this._mechanicGateT = 0;
 
     // Help overlay visibility.
     this._helpVisible = true;
@@ -726,6 +777,9 @@ export class HUD {
         this._showOverlay(this._demoOverlay, false);
       }
     }
+    if (this._mechanicGateT > 0) {
+      this._mechanicGateT = Math.max(0, this._mechanicGateT - dt);
+    }
 
     // --- Game over overlay ---
     if (state) {
@@ -794,9 +848,83 @@ export class HUD {
         if (ev.carId === this.playerCarId) {
           this._spawnBoostFloater(ev.big ? '+100' : '+12');
         }
+      } else if (ev.type === 'ballHit') {
+        this._handleBallHit(ev);
       }
       // ignore unknown event types
     }
+  }
+
+  _handleBallHit(ev) {
+    const playerHit = ev.carId === this.playerCarId;
+    let text = '';
+    let sub = '';
+    let tone = 'white';
+    let important = false;
+
+    if (playerHit) {
+      if (ev.save) {
+        text = 'SAVE';
+        sub = 'GOAL LINE CLEAR';
+        tone = 'blue';
+        important = true;
+      } else if (ev.shot) {
+        text = 'SHOT ON TARGET';
+        sub = ev.dodge ? 'FLIP STRIKE' : ev.aerial ? 'AERIAL STRIKE' : 'CLEAN STRIKE';
+        tone = 'gold';
+        important = true;
+      } else if (ev.mechanic === 'flip') {
+        text = 'FLIP TOUCH';
+        sub = 'EXTRA POWER';
+        tone = 'green';
+      } else if (ev.mechanic === 'aerial') {
+        text = 'AERIAL TOUCH';
+        sub = 'AIRBORNE CONTROL';
+        tone = 'blue';
+      } else if (ev.mechanic === 'clear') {
+        text = 'CLEAR';
+        sub = 'OUT OF DANGER';
+        tone = 'blue';
+      } else if (ev.mechanic === 'soft') {
+        text = 'SOFT TOUCH';
+        sub = 'CONTROLLED CONTACT';
+        tone = 'white';
+      } else if ((ev.power || 0) > 0.68) {
+        text = 'POWER HIT';
+        sub = 'CLEAN CONTACT';
+        tone = 'gold';
+      }
+    } else if (ev.shot) {
+      text = 'SHOT INCOMING';
+      sub = 'DEFEND NET';
+      tone = 'orange';
+      important = true;
+    }
+
+    if (!text) return;
+    if (!important && this._mechanicGateT > 0) return;
+    this._mechanicGateT = important ? 0.18 : 0.5;
+    this._spawnMechanicToast(text, sub, tone);
+  }
+
+  _spawnMechanicToast(text, sub, tone) {
+    const item = document.createElement('div');
+    item.className = 'rc-mechanic rc-' + (tone || 'white');
+    const label = document.createElement('span');
+    label.textContent = text;
+    const detail = document.createElement('small');
+    detail.textContent = sub || '';
+    item.appendChild(label);
+    item.appendChild(detail);
+    this._mechanicFeed.appendChild(item);
+
+    while (this._mechanicFeed.childNodes.length > 3) {
+      this._mechanicFeed.removeChild(this._mechanicFeed.firstChild);
+    }
+    const tid = setTimeout(() => {
+      if (item.parentNode) item.parentNode.removeChild(item);
+    }, 1250);
+    item._rcTid = tid;
   }
 
   _spawnBoostFloater(text) {

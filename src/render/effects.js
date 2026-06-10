@@ -7,6 +7,9 @@ import {
   PAD_HEIGHT,
   BALL_RADIUS,
   TEAM_BLUE,
+  GRAVITY,
+  ARENA_HALF_WIDTH,
+  ARENA_HALF_LENGTH,
 } from '../constants.js';
 
 // ---------- Particle pool ----------
@@ -320,6 +323,7 @@ export class Effects {
     this.particles = new ParticlePool(scene);
     this.shockwaves = new ShockwavePool(scene);
     this.flashes = new FlashPool(scene);
+    this.landing = this._makeLandingRing(scene);
     this.boostPads = null;
     this.padMeshes = []; // per-pad mesh + base intensity record
     /** @type {Map<number, {lastSpawn: number}>} */
@@ -327,6 +331,39 @@ export class Effects {
     /** @type {Map<number, {lastSpawn: number}>} */
     this._streakState = new Map();
     this._ballTrail = { lastSpawn: 0 };
+    this._landingPulse = 0;
+  }
+
+  _makeLandingRing(scene) {
+    const group = new THREE.Group();
+    const geom = new THREE.RingGeometry(95, 148, 72);
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0x7ee7ff,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      depthTest: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+    });
+    const ring = new THREE.Mesh(geom, mat);
+    const dotMat = new THREE.MeshBasicMaterial({
+      color: 0xeaffff,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      depthTest: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+    });
+    const dot = new THREE.Mesh(new THREE.CircleGeometry(28, 32), dotMat);
+    dot.position.z = 0.4;
+    group.add(ring);
+    group.add(dot);
+    group.visible = false;
+    group.position.z = 4;
+    scene.add(group);
+    return { mesh: group, mat, dotMat };
   }
 
   /** @param {{ pads: Array<{ position: THREE.Vector3, big: boolean, active: boolean }> }} boostPads */
@@ -459,6 +496,7 @@ export class Effects {
     if (ballSpeed > 2000) {
       this._spawnBallTrail(dt, ball, ballSpeed);
     }
+    this._updateLandingRing(dt, ball);
 
     // Step pools
     this.particles.update(dt);
@@ -544,6 +582,41 @@ export class Effects {
     }
   }
 
+  _updateLandingRing(dt, ball) {
+    this._landingPulse += dt;
+    const heightAboveGround = ball.position.z - BALL_RADIUS;
+    const verticalSpeed = ball.velocity.z;
+    const planarSpeed = Math.hypot(ball.velocity.x, ball.velocity.y);
+
+    if (heightAboveGround < 75 && Math.abs(verticalSpeed) < 220) {
+      this.landing.mesh.visible = false;
+      this.landing.mat.opacity = 0;
+      return;
+    }
+
+    const t = timeToGround(heightAboveGround, verticalSpeed);
+    if (!isFinite(t) || t < 0.03 || t > 4.0) {
+      this.landing.mesh.visible = false;
+      this.landing.mat.opacity = 0;
+      return;
+    }
+
+    const x = clamp(ball.position.x + ball.velocity.x * t, -ARENA_HALF_WIDTH + BALL_RADIUS, ARENA_HALF_WIDTH - BALL_RADIUS);
+    const y = clamp(ball.position.y + ball.velocity.y * t, -ARENA_HALF_LENGTH + BALL_RADIUS, ARENA_HALF_LENGTH - BALL_RADIUS);
+    const scale = 0.85 + Math.min(1.45, t * 0.42) + Math.min(0.45, planarSpeed / 6200);
+    const pulse = 0.5 + 0.5 * Math.sin(this._landingPulse * 9);
+    const alpha =
+      Math.min(0.62, 0.2 + heightAboveGround / 1700) *
+      Math.min(1, t / 0.35) *
+      (0.82 + pulse * 0.18);
+
+    this.landing.mesh.visible = true;
+    this.landing.mesh.position.set(x, y, 4);
+    this.landing.mesh.scale.set(scale, scale, 1);
+    this.landing.mat.opacity = alpha;
+    this.landing.dotMat.opacity = alpha * 0.42;
+  }
+
   /** @param {any[]} events */
   handleEvents(events) {
     for (const ev of events) {
@@ -552,7 +625,19 @@ export class Effects {
       } else if (ev.type === 'demo') {
         this._demoBurst(ev.position);
       } else if (ev.type === 'ballHit') {
-        if (ev.speed > 1000) this._sparkPuff(ev.position, Math.min(80, ev.speed * 0.04));
+        const impactColor =
+          ev.save ? 0x58caff :
+          ev.shot ? 0xffd84a :
+          ev.dodge ? 0xb9ff7a :
+          ev.aerial ? 0x72d8ff :
+          0xffd08a;
+        if (ev.speed > 800) this._sparkPuff(ev.position, Math.min(90, ev.speed * 0.045), impactColor);
+        if (ev.shot || ev.save || (ev.dodge && (ev.power || 0) > 0.25)) {
+          this.flashes.emit(ev.position, 220 + 220 * (ev.power || 0.4), impactColor, 0.14);
+          _vA.copy(ev.position);
+          _vA.z = Math.max(8, _vA.z - BALL_RADIUS * 0.45);
+          this.shockwaves.emit(_vA, impactColor, 24, 260 + 300 * (ev.power || 0.4), 0.28);
+        }
       } else if (ev.type === 'bounce') {
         const speed = ev.speed || 0;
         if (speed > 300) this._dustPuff(ev.position, Math.min(30, speed * 0.05));
@@ -614,8 +699,9 @@ export class Effects {
     this.flashes.emit(_vA, 400, 0xffd0a0, 0.2);
   }
 
-  _sparkPuff(position, mag) {
+  _sparkPuff(position, mag, colorHex = 0xffd08a) {
     _vA.copy(position);
+    _color.set(colorHex);
     const count = Math.floor(20 + mag * 2);
     for (let i = 0; i < count; i++) {
       const u = Math.random() * Math.PI * 2;
@@ -626,7 +712,13 @@ export class Effects {
         Math.sin(v) * Math.sin(u) * speed,
         Math.cos(v) * speed,
       );
-      this.particles.spawn(_vA, _vB, 1.0, 0.9, 0.6, 0.7 + Math.random() * 0.3, 0.25 + Math.random() * 0.2, 0.3, 2.0, 1);
+      this.particles.spawn(
+        _vA, _vB,
+        _color.r * 1.25, _color.g * 1.25, _color.b * 1.25,
+        0.7 + Math.random() * 0.3,
+        0.25 + Math.random() * 0.2,
+        0.3, 2.0, 1,
+      );
     }
   }
 
@@ -649,5 +741,26 @@ export class Effects {
     this._boostState.clear();
     this._streakState.clear();
     this._ballTrail.lastSpawn = 0;
+    this.landing.mesh.visible = false;
+    this.landing.mat.opacity = 0;
+    this.landing.dotMat.opacity = 0;
   }
+}
+
+function timeToGround(heightAboveGround, verticalSpeed) {
+  const a = -0.5 * GRAVITY;
+  const b = verticalSpeed;
+  const c = heightAboveGround;
+  const disc = b * b - 4 * a * c;
+  if (disc < 0) return Infinity;
+  const sq = Math.sqrt(disc);
+  const t1 = (-b - sq) / (2 * a);
+  const t2 = (-b + sq) / (2 * a);
+  const minPositive = Math.min(t1 > 0 ? t1 : Infinity, t2 > 0 ? t2 : Infinity);
+  const maxPositive = Math.max(t1 > 0 ? t1 : -Infinity, t2 > 0 ? t2 : -Infinity);
+  return isFinite(minPositive) ? minPositive : maxPositive;
+}
+
+function clamp(v, lo, hi) {
+  return v < lo ? lo : v > hi ? hi : v;
 }
