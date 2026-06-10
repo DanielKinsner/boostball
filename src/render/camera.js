@@ -6,11 +6,14 @@ import {
   SUPERSONIC_ON,
 } from '../constants.js';
 
-const BALL_CAM_DIST = 430;
-const BALL_CAM_HEIGHT = 120;
-const CHASE_DIST = 430;
-const CHASE_HEIGHT = 140;
+const BALL_CAM_DIST = 380;
+const BALL_CAM_HEIGHT = 115;
+const CHASE_DIST = 380;
+const CHASE_HEIGHT = 135;
 const CHASE_LOOK_AHEAD = 300;
+// Max angular speed (rad/s) the camera may swing around the car (ball cam).
+// Without this the boom whips 180° in a frame when the car crosses the ball.
+const SWIVEL_RATE = 3.2;
 const MIN_Z = 25;
 const SOFT_X = 4350;
 const SOFT_Y = 5500;
@@ -37,6 +40,28 @@ export class CameraRig {
     this._lookSmooth = new THREE.Vector3(0, 0, 100);
     this._fov = FOV_BASE;
     this._orbitT = 0;
+    this._boomDir = new THREE.Vector3(0, -1, 0); // smoothed planar camera-boom direction
+    this._trauma = 0;   // 0..1; shake amplitude follows trauma^2
+    this._shakeT = 0;
+  }
+
+  /** Add screen shake (goal/demo/big hits). amount 0..1, accumulates and decays. */
+  addShake(amount) {
+    this._trauma = Math.min(1, this._trauma + amount);
+  }
+
+  _applyShake(dt) {
+    if (this._trauma <= 0.001) { this._trauma = 0; return; }
+    this._shakeT += dt;
+    const s = this._trauma * this._trauma;
+    const t = this._shakeT;
+    // Layered incommensurate sines read as noise but stay frame-rate independent.
+    const amp = 30 * s;
+    this.camera.position.x += amp * (Math.sin(t * 91.3) * 0.6 + Math.sin(t * 47.7) * 0.4);
+    this.camera.position.y += amp * (Math.sin(t * 83.1 + 1.7) * 0.6 + Math.sin(t * 53.9 + 0.6) * 0.4);
+    this.camera.position.z += amp * 0.55 * Math.sin(t * 71.7 + 3.1);
+    this.camera.rotateZ(0.018 * s * Math.sin(t * 59.3));
+    this._trauma = Math.max(0, this._trauma - dt * 1.4);
   }
 
   /**
@@ -51,6 +76,7 @@ export class CameraRig {
       this._orbit(dt, _ballPos, 900, 350);
       this._applySoftClamps();
       this._updateFov(dt, false);
+      this._applyShake(dt);
       return;
     }
 
@@ -58,6 +84,7 @@ export class CameraRig {
       this._orbit(dt, _ballPos, 1100, 420);
       this._applySoftClamps();
       this._updateFov(dt, false);
+      this._applyShake(dt);
       return;
     }
 
@@ -73,8 +100,9 @@ export class CameraRig {
         _dir.copy(_planar);
       }
       _dir.normalize();
+      this._swivelToward(_dir, dt);
       _idealPos.copy(_carPos)
-        .addScaledVector(_dir, BALL_CAM_DIST)
+        .addScaledVector(this._boomDir, BALL_CAM_DIST)
         .add(_v3(0, 0, BALL_CAM_HEIGHT));
       _lookTarget.copy(_ballPos);
     } else {
@@ -91,15 +119,16 @@ export class CameraRig {
       _planar.set(-_fwd.x, -_fwd.y, 0);
       if (_planar.lengthSq() < 1e-4) _planar.set(0, -1, 0);
       _planar.normalize();
+      this._swivelToward(_planar, dt);
       _idealPos.copy(_carPos)
-        .addScaledVector(_planar, CHASE_DIST)
+        .addScaledVector(this._boomDir, CHASE_DIST)
         .add(_v3(0, 0, CHASE_HEIGHT));
       _lookTarget.copy(_carPos).addScaledVector(_fwd, CHASE_LOOK_AHEAD);
     }
 
     // Exp damping
-    const kPos = 1 - Math.exp(-5 * dt);
-    const kLook = 1 - Math.exp(-8 * dt);
+    const kPos = 1 - Math.exp(-3.2 * dt);
+    const kLook = 1 - Math.exp(-6 * dt);
 
     _camPos.copy(this.camera.position).lerp(_idealPos, kPos);
     this.camera.position.copy(_camPos);
@@ -113,6 +142,22 @@ export class CameraRig {
     // FOV kick when supersonic.
     const isSuper = car.velocity.length() >= SUPERSONIC_ON;
     this._updateFov(dt, isSuper);
+    this._applyShake(dt);
+  }
+
+  // Rotate the smoothed boom direction toward `target` (planar unit vector),
+  // capped at SWIVEL_RATE rad/s so the camera never whips around the car.
+  _swivelToward(target, dt) {
+    const cur = Math.atan2(this._boomDir.y, this._boomDir.x);
+    const tgt = Math.atan2(target.y, target.x);
+    let delta = tgt - cur;
+    while (delta > Math.PI) delta -= 2 * Math.PI;
+    while (delta < -Math.PI) delta += 2 * Math.PI;
+    const maxStep = SWIVEL_RATE * dt;
+    if (delta > maxStep) delta = maxStep;
+    else if (delta < -maxStep) delta = -maxStep;
+    const a = cur + delta;
+    this._boomDir.set(Math.cos(a), Math.sin(a), 0);
   }
 
   _orbit(dt, center, dist, height) {

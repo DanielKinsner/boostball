@@ -342,7 +342,7 @@ export class Effects {
       const mat = new THREE.MeshStandardMaterial({
         color: 0x161208,
         emissive: color,
-        emissiveIntensity: 1.6,
+        emissiveIntensity: 1.2, // softer, less neon
         transparent: true,
         opacity: 1,
         side: THREE.DoubleSide,
@@ -350,7 +350,7 @@ export class Effects {
       const ringMat = new THREE.MeshBasicMaterial({
         color,
         transparent: true,
-        opacity: 0.55,
+        opacity: 0.4, // softer halo on the floor
         depthWrite: false,
         blending: THREE.AdditiveBlending,
         side: THREE.DoubleSide,
@@ -371,7 +371,7 @@ export class Effects {
       }
       group.add(primary);
       if (ring) group.add(ring);
-      this.padMeshes.push({ pad, mesh: primary, ring, mat, ringMat, baseIntensity: 1.6 });
+      this.padMeshes.push({ pad, mesh: primary, ring, mat, ringMat, baseIntensity: 1.2 });
     }
     this.scene.add(group);
   }
@@ -389,7 +389,7 @@ export class Effects {
       // Snap to target (cheap; could smooth but not necessary).
       p.mat.emissiveIntensity = targetIntensity;
       p.mesh.scale.set(targetScale, targetScale, targetScale);
-      if (p.ring) p.ringMat.opacity = active ? 0.55 : 0.18;
+      if (p.ring) p.ringMat.opacity = active ? 0.4 : 0.12;
     }
 
     // Boost flames + supersonic streaks per car.
@@ -430,7 +430,7 @@ export class Effects {
     let st = this._boostState.get(car.id);
     if (!st) { st = { lastSpawn: 0 }; this._boostState.set(car.id, st); }
     st.lastSpawn += dt;
-    const rate = 1 / 80; // 80 particles/s
+    const rate = 1 / 110; // denser flame for fire-like body
     while (st.lastSpawn >= rate) {
       st.lastSpawn -= rate;
       visual.nozzleWorldPos(_v);
@@ -439,12 +439,27 @@ export class Effects {
       _vA.x += (Math.random() - 0.5) * 200;
       _vA.y += (Math.random() - 0.5) * 200;
       _vA.z += (Math.random() - 0.5) * 200;
-      // Color: yellow→orange variance
-      const t = Math.random();
-      const r = 1.0;
-      const g = 0.55 + 0.3 * (1 - t);
-      const b = 0.15 + 0.1 * (1 - t);
-      this.particles.spawn(_v, _vA, r, g, b, 0.9 + Math.random() * 0.3, 0.25 + Math.random() * 0.15, 0.05, 4.0, 1);
+      // Color: white-hot core (close to nozzle, low spread) → orange (longer life).
+      // We approximate by biasing: short-lived = brighter/whiter, long-lived = oranger.
+      const heat = Math.random(); // 0..1; high = young/hot
+      let r, g, b, life, size;
+      if (heat > 0.7) {
+        // White-hot core
+        r = 1.4; g = 1.25; b = 0.85;
+        size = 0.7 + Math.random() * 0.2;
+        life = 0.12 + Math.random() * 0.08;
+      } else if (heat > 0.35) {
+        // Yellow-orange body
+        r = 1.3; g = 0.75; b = 0.2;
+        size = 0.9 + Math.random() * 0.25;
+        life = 0.22 + Math.random() * 0.12;
+      } else {
+        // Cooler orange-red tail
+        r = 1.2; g = 0.4; b = 0.1;
+        size = 1.0 + Math.random() * 0.3;
+        life = 0.32 + Math.random() * 0.15;
+      }
+      this.particles.spawn(_v, _vA, r, g, b, size, life, 0.05, 4.0, 1);
     }
   }
 

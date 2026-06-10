@@ -48,6 +48,14 @@ let ballCam = true;
 let paused = false;
 const pendingRespawns = []; // { carId, t }
 
+// Cinematic slow-mo: time scale dips to `floor` then eases back to 1 over `dur` real seconds.
+const slowmo = { t: 0, dur: 1, floor: 0.3 };
+function triggerSlowmo(dur, floor) {
+  slowmo.t = dur;
+  slowmo.dur = dur;
+  slowmo.floor = floor;
+}
+
 function applyKickoff() {
   world.resetKickoff(pickKickoffSpawns(1));
   boostPads.reset();
@@ -80,16 +88,25 @@ function frame(now) {
 
   if (paused) { sceneMgr.render(dt); return; }
 
-  acc += dt;
+  let timeScale = 1;
+  if (slowmo.t > 0) {
+    slowmo.t = Math.max(0, slowmo.t - dt);
+    const p = 1 - slowmo.t / slowmo.dur;
+    timeScale = slowmo.floor + (1 - slowmo.floor) * p * p;
+  }
+  const simDt = dt * timeScale;
+
+  acc += simDt;
   while (acc >= C.PHYSICS_DT) {
     acc -= C.PHYSICS_DT;
     stepGame(C.PHYSICS_DT);
   }
 
-  // Per-frame rendering
-  ballVisual.update(world.ball, dt);
-  for (const car of world.cars) visuals.get(car.id).update(car, dt);
-  effects.update(dt, { cars: world.cars, ball: world.ball, visuals });
+  // Per-frame rendering. World-anchored visuals run on scaled time so slow-mo
+  // reads as cinematic; the camera runs on real time so it stays fluid.
+  ballVisual.update(world.ball, simDt);
+  for (const car of world.cars) visuals.get(car.id).update(car, simDt);
+  effects.update(simDt, { cars: world.cars, ball: world.ball, visuals });
   cameraRig.update(dt, { car: playerCar, ball: world.ball, ballCam, phase: state.phase });
   hud.update(dt, { state, playerCar, ball: world.ball });
   sfx.update(dt, { playerCar, ball: world.ball, state });
@@ -107,12 +124,22 @@ function stepGame(dt) {
     [botCar.id]: frozen ? zeroControls() : botControls,
   };
 
+  window.__BB_CTRL = controlsById; // diagnostics
   const events = world.step(dt, controlsById, { freeze: frozen });
   events.push(...boostPads.update(dt, world.cars));
 
-  // Demo respawn scheduling
+  // Demo respawn scheduling + cinematic/impact feedback
   for (const ev of events) {
-    if (ev.type === 'demo') pendingRespawns.push({ carId: ev.victimId, t: C.DEMO_RESPAWN_TIME });
+    if (ev.type === 'demo') {
+      pendingRespawns.push({ carId: ev.victimId, t: C.DEMO_RESPAWN_TIME });
+      triggerSlowmo(0.6, 0.45);
+      cameraRig.addShake(0.7);
+    } else if (ev.type === 'goal') {
+      triggerSlowmo(1.5, 0.25);
+      cameraRig.addShake(1.0);
+    } else if (ev.type === 'ballHit' && ev.speed > 1700) {
+      cameraRig.addShake(Math.min(0.35, (ev.speed - 1700) / 4000));
+    }
   }
   for (let i = pendingRespawns.length - 1; i >= 0; i--) {
     const r = pendingRespawns[i];
@@ -136,3 +163,6 @@ function stepGame(dt) {
 }
 
 requestAnimationFrame(frame);
+
+// Debug/diagnostics handle (also used by automated browser tests).
+window.__BOOSTBALL = { world, playerCar, botCar, state, input, boostPads };

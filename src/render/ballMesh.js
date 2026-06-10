@@ -1,4 +1,5 @@
-// BallVisual — soccer-pattern sphere with emissive seam glow.
+// BallVisual — photoreal soccer ball: glossy PBR (MeshPhysicalMaterial) with a
+// clearcoat for the leather-panel "sheen". Reflections come from scene.environment.
 import * as THREE from 'three';
 import { BALL_RADIUS } from '../constants.js';
 
@@ -12,33 +13,30 @@ export class BallVisual {
     this.mesh = new THREE.Group();
     this.mesh.name = 'ballVisual';
 
-    const tex = makeBallTexture();
-    const mat = new THREE.MeshStandardMaterial({
-      map: tex,
+    const albedo = makeBallTexture();
+    const roughMap = makeBallRoughnessMap();
+    const normalMap = makeBallNormalMap();
+
+    // Glossy leather-panel ball: high envMapIntensity so the stadium reflects in
+    // the white panels, clearcoat for the slight gloss layer over the panels,
+    // restrained emissive (no glow) — we want reflective realism, not neon.
+    const mat = new THREE.MeshPhysicalMaterial({
+      map: albedo,
       color: 0xffffff,
       roughness: 0.45,
-      metalness: 0.1,
-      emissive: 0xffffff,
-      emissiveMap: makeBallEmissive(),
-      emissiveIntensity: 0.45,
+      roughnessMap: roughMap,
+      metalness: 0.0,
+      normalMap,
+      normalScale: new THREE.Vector2(0.6, 0.6),
+      clearcoat: 0.6,
+      clearcoatRoughness: 0.25,
+      envMapIntensity: 1.6,
     });
-    const geom = new THREE.SphereGeometry(BALL_RADIUS, 48, 32);
+    const geom = new THREE.SphereGeometry(BALL_RADIUS, 64, 48);
     this.body = new THREE.Mesh(geom, mat);
     this.body.castShadow = true;
     this.body.receiveShadow = false;
     this.mesh.add(this.body);
-
-    // Thin rim halo for bloom feed.
-    const haloMat = new THREE.MeshBasicMaterial({
-      color: 0xb6ddff,
-      transparent: true,
-      opacity: 0.25,
-      side: THREE.BackSide,
-      depthWrite: false,
-    });
-    const haloGeom = new THREE.SphereGeometry(BALL_RADIUS * 1.06, 24, 16);
-    this.halo = new THREE.Mesh(haloGeom, haloMat);
-    this.mesh.add(this.halo);
 
     // Visual spin quaternion (separate from physics quaternion — physics ball has no quat).
     this._spinQ = new THREE.Quaternion();
@@ -64,6 +62,7 @@ export class BallVisual {
   }
 }
 
+// Pentagon-and-hexagon pattern (white leather + black accent pentagons).
 function makeBallTexture() {
   const W = 1024;
   const H = 512;
@@ -71,11 +70,11 @@ function makeBallTexture() {
   c.width = W;
   c.height = H;
   const ctx = c.getContext('2d');
-  // White base
-  ctx.fillStyle = '#f3f4f8';
+  // Off-white leather base with subtle warmth.
+  ctx.fillStyle = '#eef0ef';
   ctx.fillRect(0, 0, W, H);
-  // Black pentagon-suggesting blobs in a pseudo-buckminster pattern.
-  ctx.fillStyle = '#101218';
+  // Pentagons in pseudo-truncated-icosahedron layout.
+  ctx.fillStyle = '#1a1d22';
   const cells = 6;
   for (let j = 0; j < cells; j++) {
     for (let i = 0; i < cells * 2; i++) {
@@ -87,9 +86,84 @@ function makeBallTexture() {
       }
     }
   }
-  // Subtle gridlines suggesting seams.
-  ctx.strokeStyle = 'rgba(20, 24, 36, 0.4)';
-  ctx.lineWidth = 2;
+  // Seam lines (slightly darker, sub-pixel).
+  ctx.strokeStyle = 'rgba(40, 44, 52, 0.55)';
+  ctx.lineWidth = 1.5;
+  for (let j = 0; j < cells; j++) {
+    ctx.beginPath();
+    ctx.moveTo(0, (j / cells) * H);
+    ctx.lineTo(W, (j / cells) * H);
+    ctx.stroke();
+  }
+  // Subtle leather grain noise.
+  const img = ctx.getImageData(0, 0, W, H);
+  for (let i = 0; i < img.data.length; i += 4) {
+    const n = (Math.random() - 0.5) * 14;
+    img.data[i] = Math.max(0, Math.min(255, img.data[i] + n));
+    img.data[i + 1] = Math.max(0, Math.min(255, img.data[i + 1] + n));
+    img.data[i + 2] = Math.max(0, Math.min(255, img.data[i + 2] + n));
+  }
+  ctx.putImageData(img, 0, 0);
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.anisotropy = 8;
+  return tex;
+}
+
+// Roughness variation — slight gloss change between leather panels and seams.
+function makeBallRoughnessMap() {
+  const W = 512;
+  const H = 256;
+  const c = document.createElement('canvas');
+  c.width = W;
+  c.height = H;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#7a7a7a'; // base 0.48
+  ctx.fillRect(0, 0, W, H);
+  // Slightly rougher seams (lighter = rougher).
+  ctx.strokeStyle = '#a0a0a0';
+  ctx.lineWidth = 4;
+  const cells = 6;
+  for (let j = 0; j < cells; j++) {
+    ctx.beginPath();
+    ctx.moveTo(0, (j / cells) * H);
+    ctx.lineTo(W, (j / cells) * H);
+    ctx.stroke();
+  }
+  // Noise sprinkles for realism.
+  const img = ctx.getImageData(0, 0, W, H);
+  for (let i = 0; i < img.data.length; i += 4) {
+    const n = (Math.random() - 0.5) * 24;
+    const v = Math.max(0, Math.min(255, img.data[i] + n));
+    img.data[i] = v; img.data[i + 1] = v; img.data[i + 2] = v;
+  }
+  ctx.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(c);
+  // Roughness maps must be linear (not sRGB).
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  return tex;
+}
+
+// Faint normal map giving panel edges a hint of relief.
+function makeBallNormalMap() {
+  const W = 512;
+  const H = 256;
+  const c = document.createElement('canvas');
+  c.width = W;
+  c.height = H;
+  const ctx = c.getContext('2d');
+  // Neutral normal = (128, 128, 255) = flat surface
+  ctx.fillStyle = '#8080ff';
+  ctx.fillRect(0, 0, W, H);
+  // Dark grooves at seams → small dip in surface
+  ctx.strokeStyle = 'rgba(96, 96, 255, 1)';
+  ctx.lineWidth = 4;
+  const cells = 6;
   for (let j = 0; j < cells; j++) {
     ctx.beginPath();
     ctx.moveTo(0, (j / cells) * H);
@@ -97,32 +171,7 @@ function makeBallTexture() {
     ctx.stroke();
   }
   const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.wrapT = THREE.ClampToEdgeWrapping;
-  return tex;
-}
-
-function makeBallEmissive() {
-  const W = 512;
-  const H = 256;
-  const c = document.createElement('canvas');
-  c.width = W;
-  c.height = H;
-  const ctx = c.getContext('2d');
-  ctx.fillStyle = '#000000';
-  ctx.fillRect(0, 0, W, H);
-  // Glowing seams ringing the ball
-  ctx.strokeStyle = '#5fc2ff';
-  ctx.lineWidth = 3;
-  for (let j = 1; j < 4; j++) {
-    ctx.beginPath();
-    ctx.moveTo(0, (j / 4) * H);
-    ctx.lineTo(W, (j / 4) * H);
-    ctx.stroke();
-  }
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.colorSpace = THREE.NoColorSpace;
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.ClampToEdgeWrapping;
   return tex;
